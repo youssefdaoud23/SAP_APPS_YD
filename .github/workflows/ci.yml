@@ -51,6 +51,8 @@ jobs:
           grep -q 'v05-studio.js' index.html
           ! grep -q 'src="live-data.js"' index.html
           ! grep -q 'src="action-designer.js"' index.html
+          grep -q 'new MutationObserver(scheduleApply)' platform-version.js
+          grep -q 'span.dataset.iasBuildMarker !== marker' platform-version.js
 
       - name: V0.5 model tests
         run: node tests/platform-model.test.js
@@ -58,8 +60,9 @@ jobs:
       - name: Test generated build metadata
         run: |
           node scripts/generate-build-info.js
-          EXPECTED="$(git rev-parse --short=8 HEAD)"
-          node -e "const x=require('./build-info.json'); if(x.version!=='0.5.2') process.exit(1); if(x.shortCommit!=='$EXPECTED') { console.error(x.shortCommit, '$EXPECTED'); process.exit(1); }"
+          EXPECTED_SHA="$(git rev-parse --short=8 HEAD)"
+          EXPECTED_VERSION="$(node -p "require('./package.json').version")"
+          node -e "const x=require('./build-info.json'); if(x.version!==process.argv[1]) process.exit(1); if(x.shortCommit!==process.argv[2]) { console.error(x.shortCommit, process.argv[2]); process.exit(1); }" "$EXPECTED_VERSION" "$EXPECTED_SHA"
           rm -f build-info.json
 
       - name: Start mock SAP and App Studio
@@ -88,10 +91,10 @@ jobs:
 
       - name: Test running version fingerprint
         run: |
-          EXPECTED="$(git rev-parse --short=8 HEAD)"
+          EXPECTED_SHA="$(git rev-parse --short=8 HEAD)"
+          EXPECTED_VERSION="$(node -p "require('./package.json').version")"
           curl -fsS -u admin:testpass 'http://127.0.0.1:18081/api/version' > /tmp/version.json
-          grep '"version":"0.5.2"' /tmp/version.json
-          grep "\"shortCommit\":\"$EXPECTED\"" /tmp/version.json
+          node -e "const x=require('/tmp/version.json'); if(x.version!==process.argv[1] || x.shortCommit!==process.argv[2]) { console.error(x); process.exit(1); }" "$EXPECTED_VERSION" "$EXPECTED_SHA"
 
       - name: Test connection registry
         run: |
@@ -125,10 +128,11 @@ jobs:
 
       - name: Test Docker image on native port 8081
         run: |
-          EXPECTED="$(git rev-parse --short=8 HEAD)"
+          EXPECTED_SHA="$(git rev-parse --short=8 HEAD)"
+          EXPECTED_VERSION="$(node -p "require('./package.json').version")"
           docker build -t invarture-app-studio:ci .
           ACTUAL="$(docker run --rm --entrypoint node invarture-app-studio:ci -e 'process.stdout.write(require("./build-info.json").shortCommit || "")')"
-          test "$ACTUAL" = "$EXPECTED"
+          test "$ACTUAL" = "$EXPECTED_SHA"
           docker run -d --name invarture-ci -p 18082:8081 invarture-app-studio:ci
           for i in {1..30}; do
             if curl -fsS http://127.0.0.1:18082/healthz >/tmp/docker-health.json; then break; fi
@@ -137,8 +141,7 @@ jobs:
           cat /tmp/docker-health.json
           grep '"ok":true' /tmp/docker-health.json
           curl -fsS http://127.0.0.1:18082/api/version >/tmp/docker-version.json
-          grep '"version":"0.5.2"' /tmp/docker-version.json
-          grep "\"shortCommit\":\"$EXPECTED\"" /tmp/docker-version.json
+          node -e "const x=require('/tmp/docker-version.json'); if(x.version!==process.argv[1] || x.shortCommit!==process.argv[2]) { console.error(x); process.exit(1); }" "$EXPECTED_VERSION" "$EXPECTED_SHA"
           docker rm -f invarture-ci
 
       - name: Print diagnostics on failure
