@@ -8,6 +8,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const sapApi = require('./api/sap');
+const workspaceApi = require('./api/workspace');
 
 const PORT = Number(process.env.PORT || 8080);
 const ROOT = __dirname;
@@ -68,6 +69,7 @@ const server = http.createServer(async (req, res) => {
   applySecurityHeaders(res);
   if (!authorized(req)) return demandAuth(res);
   if (req.url.startsWith('/api/sap')) return sapApi(req, res);
+  if (req.url.startsWith('/api/workspace')) return workspaceApi(req, res);
   return serveStatic(req, res);
 });
 
@@ -75,4 +77,5 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log(`Invarture App Studio listening on http://0.0.0.0:${PORT}`);
   console.log(authRequired() ? 'HTTP Basic protection is enabled.' : 'HTTP Basic protection is disabled. Set APP_STUDIO_USER and APP_STUDIO_PASSWORD before exposing the service.');
   if (!process.env.SAP_CONNECTIONS_JSON) console.log('SAP_CONNECTIONS_JSON is not set: Connection Center will show no server-side SAP connections.');
+  if (!process.env.WORKSPACE_FILE) console.log('WORKSPACE_FILE is not set: server workspace sync is disabled.');
 });
