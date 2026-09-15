@@ -14,6 +14,7 @@ const { getBuildInfo } = require('./lib/buildInfo');
 
 const PORT = Number(process.env.PORT || 8080);
 const ROOT = __dirname;
+const BUILD_INFO = getBuildInfo(ROOT);
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -30,6 +31,8 @@ function applySecurityHeaders(res) {
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
   res.setHeader('X-Frame-Options', 'SAMEORIGIN');
   res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  res.setHeader('X-Invarture-Version', BUILD_INFO.version);
+  res.setHeader('X-Invarture-Commit', BUILD_INFO.shortCommit || 'unavailable');
 }
 
 function authRequired() {
@@ -77,9 +80,8 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, '0.0.0.0', () => {
-  const build = getBuildInfo(ROOT);
-  console.log(`Invarture App Studio ${build.fingerprint} listening on http://0.0.0.0:${PORT}`);
-  if (build.commit) console.log(`Running Git commit: ${build.commit}`);
+  console.log(`Invarture App Studio ${BUILD_INFO.fingerprint} listening on http://0.0.0.0:${PORT}`);
+  if (BUILD_INFO.commit) console.log(`Running Git commit: ${BUILD_INFO.commit}`);
   else console.log('Git commit metadata is unavailable for this runtime.');
   console.log(authRequired() ? 'HTTP Basic protection is enabled.' : 'HTTP Basic protection is disabled. Set APP_STUDIO_USER and APP_STUDIO_PASSWORD before exposing the service.');
   if (!process.env.SAP_CONNECTIONS_JSON) console.log('SAP_CONNECTIONS_JSON is not set: Connection Center will show no server-side SAP connections.');
