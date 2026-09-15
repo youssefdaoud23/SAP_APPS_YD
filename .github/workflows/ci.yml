@@ -125,7 +125,7 @@ jobs:
         run: |
           EXPECTED="$(git rev-parse --short=8 HEAD)"
           docker build -t invarture-app-studio:ci .
-          ACTUAL="$(docker run --rm --entrypoint node invarture-app-studio:ci -e \"process.stdout.write(require('./build-info.json').shortCommit || '')\")"
+          ACTUAL="$(docker run --rm --entrypoint node invarture-app-studio:ci -e 'process.stdout.write(require("./build-info.json").shortCommit || "")')"
           test "$ACTUAL" = "$EXPECTED"
 
       - name: Print diagnostics on failure
