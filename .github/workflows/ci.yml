@@ -23,6 +23,8 @@ jobs:
           node --check workspace-sync.js
           node --check action-designer.js
           node --check platform-version.js
+          node --check experience-settings.js
+          node --check app-advanced.js
           node --check server.js
           node --check api/sap.js
           node --check api/workspace.js
@@ -30,6 +32,8 @@ jobs:
           node --check lib/loadEnv.js
           node --check sw.js
           node --check tests/mock-sap.js
+          grep -q 'experience-settings.js' index.html
+          grep -q 'app-advanced.js' index.html
 
       - name: Start mock SAP and App Studio
         env:
