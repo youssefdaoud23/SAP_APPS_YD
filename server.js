@@ -13,6 +13,7 @@ const versionApi = require('./api/version');
 const platformApi = require('./api/platform');
 const securityApi = require('./api/security');
 const auditApi = require('./api/audit');
+const deploymentsApi = require('./api/deployments');
 const database = require('./lib/database');
 const workspaceStore = require('./lib/workspaceStore');
 const { principal } = require('./lib/securityModel');
@@ -103,6 +104,7 @@ const server = http.createServer(async (req, res) => {
   if (req.url.startsWith('/api/platform')) return platformApi(req, res);
   if (req.url.startsWith('/api/security')) return securityApi(req, res);
   if (req.url.startsWith('/api/audit')) return auditApi(req, res);
+  if (req.url.startsWith('/api/deployments')) return deploymentsApi(req, res);
   if (req.url.startsWith('/api/sap')) return sapApi(req, res);
   if (req.url.startsWith('/api/workspace')) return workspaceApi(req, res);
   return serveStatic(req, res);
