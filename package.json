@@ -1,13 +1,16 @@
 {
   "name": "invarture-app-studio",
-  "version": "0.5.3",
+  "version": "0.6.0",
   "private": true,
   "description": "Invarture-branded SAP low-code application studio",
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
-    "test": "node tests/platform-model.test.js",
+    "test": "node tests/platform-model.test.js && node tests/security-model.test.js",
     "build:info": "node scripts/generate-build-info.js"
+  },
+  "dependencies": {
+    "pg": "^8.13.1"
   },
   "engines": {
     "node": ">=18"
