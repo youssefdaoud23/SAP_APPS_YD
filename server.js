@@ -10,6 +10,10 @@ const crypto = require('crypto');
 const sapApi = require('./api/sap');
 const workspaceApi = require('./api/workspace');
 const versionApi = require('./api/version');
+const platformApi = require('./api/platform');
+const database = require('./lib/database');
+const workspaceStore = require('./lib/workspaceStore');
+const { principal } = require('./lib/securityModel');
 const { getBuildInfo } = require('./lib/buildInfo');
 
 const PORT = Number(process.env.PORT || 8081);
@@ -43,8 +47,14 @@ function authorized(req) {
   if (!authRequired()) return true;
   const supplied = String(req.headers.authorization || '');
   const expected = `Basic ${Buffer.from(`${process.env.APP_STUDIO_USER}:${process.env.APP_STUDIO_PASSWORD}`).toString('base64')}`;
-  const a = Buffer.from(supplied); const b = Buffer.from(expected);
+  const a = Buffer.from(supplied);
+  const b = Buffer.from(expected);
   return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+function requestPrincipal() {
+  if (authRequired()) return principal(process.env.APP_STUDIO_USER, ['platform-admin'], 'basic');
+  return principal('local-development', ['platform-admin'], 'none');
 }
 
 function demandAuth(res) {
@@ -86,17 +96,31 @@ const server = http.createServer(async (req, res) => {
   applySecurityHeaders(res);
   if (req.url === '/healthz' || req.url.startsWith('/healthz?')) return health(res);
   if (!authorized(req)) return demandAuth(res);
+  req.principal = requestPrincipal();
   if (req.url.startsWith('/api/version')) return versionApi(req, res);
+  if (req.url.startsWith('/api/platform')) return platformApi(req, res);
   if (req.url.startsWith('/api/sap')) return sapApi(req, res);
   if (req.url.startsWith('/api/workspace')) return workspaceApi(req, res);
   return serveStatic(req, res);
 });
 
-server.listen(PORT, '0.0.0.0', () => {
-  console.log(`Invarture App Studio ${BUILD_INFO.fingerprint} listening on http://0.0.0.0:${PORT}`);
-  if (BUILD_INFO.commit) console.log(`Running Git commit: ${BUILD_INFO.commit}`);
-  else console.log('Git commit metadata is unavailable for this runtime.');
-  console.log(authRequired() ? 'HTTP Basic protection is enabled.' : 'HTTP Basic protection is disabled. Set APP_STUDIO_USER and APP_STUDIO_PASSWORD before exposing the service.');
-  if (!process.env.SAP_CONNECTIONS_JSON) console.log('SAP_CONNECTIONS_JSON is not set: Connection Center will show no server-side SAP connections.');
-  if (!process.env.WORKSPACE_FILE) console.log('WORKSPACE_FILE is not set: server workspace sync is disabled.');
-});
+async function start() {
+  try {
+    if (database.enabled()) await database.ensureDatabase();
+  } catch (error) {
+    console.error('Database initialization failed:', error.message);
+    process.exitCode = 1;
+    return;
+  }
+
+  server.listen(PORT, '0.0.0.0', () => {
+    console.log(`Invarture App Studio ${BUILD_INFO.fingerprint} listening on http://0.0.0.0:${PORT}`);
+    if (BUILD_INFO.commit) console.log(`Running Git commit: ${BUILD_INFO.commit}`);
+    else console.log('Git commit metadata is unavailable for this runtime.');
+    console.log(`Workspace storage: ${workspaceStore.storageMode()}`);
+    console.log(authRequired() ? 'HTTP Basic protection is enabled.' : 'HTTP Basic protection is disabled. Local development receives the transitional platform-admin role.');
+    if (!process.env.SAP_CONNECTIONS_JSON) console.log('SAP_CONNECTIONS_JSON is not set: Connection Center will show no server-side SAP connections.');
+  });
+}
+
+start();
