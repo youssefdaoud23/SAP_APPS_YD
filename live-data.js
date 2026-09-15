@@ -37,7 +37,7 @@
       const p = (async () => {
         const url = new URL(API, location.origin);
         url.searchParams.set('action', 'request'); url.searchParams.set('id', id); url.searchParams.set('path', path);
-        const response = await fetch(url, { headers: { Accept: 'application/json,text/plain,*/*' } });
+        const response = await fetch(url, { headers: { Accept: 'application/json,text/plain,*/*' }, cache: 'no-store' });
         const text = await response.text();
         if (!response.ok) throw new Error(text.slice(0, 300) || `HTTP ${response.status}`);
         try { return JSON.parse(text); } catch { return text; }
@@ -156,10 +156,20 @@
     requestAnimationFrame(() => { scheduled = false; hydrateStudio(); hydratePreview(); });
   }
 
+  function forceRefresh() {
+    inflight.clear();
+    document.querySelectorAll('[data-live-hydration]').forEach(el => {
+      delete el.dataset.liveHydration;
+      delete el.dataset.liveState;
+    });
+    schedule();
+  }
+
   const observer = new MutationObserver(schedule);
   observer.observe(document.body, { childList: true, subtree: true });
   window.addEventListener('storage', schedule);
   window.addEventListener('focus', schedule);
+  window.addEventListener('invarture:refresh-data', forceRefresh);
   setInterval(schedule, 8000);
   schedule();
 })();
