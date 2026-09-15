@@ -22,6 +22,7 @@ jobs:
           node --check v05-preload.js
           node --check developer-tools.js
           node --check app.js
+          node --check v05-bootstrap.js
           node --check connection-center.js
           node --check runtime-data-v05.js
           node --check workspace-sync.js
@@ -39,6 +40,7 @@ jobs:
           node --check tests/mock-sap.js
           node --check tests/platform-model.test.js
           grep -q 'lib/platformModel.js' index.html
+          grep -q 'v05-bootstrap.js' index.html
           grep -q 'runtime-data-v05.js' index.html
           grep -q 'action-designer-v05.js' index.html
           grep -q 'v05-studio.js' index.html
