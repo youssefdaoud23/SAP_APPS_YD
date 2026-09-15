@@ -18,6 +18,7 @@ jobs:
       - name: Syntax checks
         run: |
           node --check lib/platformModel.js
+          node --check lib/buildInfo.js
           node --check history-preload.js
           node --check v05-preload.js
           node --check developer-tools.js
@@ -34,8 +35,10 @@ jobs:
           node --check server.js
           node --check api/sap.js
           node --check api/workspace.js
+          node --check api/version.js
           node --check lib/sapConnector.js
           node --check lib/loadEnv.js
+          node --check scripts/generate-build-info.js
           node --check sw.js
           node --check tests/mock-sap.js
           node --check tests/platform-model.test.js
@@ -49,6 +52,13 @@ jobs:
 
       - name: V0.5 model tests
         run: node tests/platform-model.test.js
+
+      - name: Test generated build metadata
+        run: |
+          node scripts/generate-build-info.js
+          EXPECTED="$(git rev-parse --short=8 HEAD)"
+          node -e "const x=require('./build-info.json'); if(x.version!=='0.5.1') process.exit(1); if(x.shortCommit!=='$EXPECTED') { console.error(x.shortCommit, '$EXPECTED'); process.exit(1); }"
+          rm -f build-info.json
 
       - name: Start mock SAP and App Studio
         env:
@@ -73,6 +83,13 @@ jobs:
         run: |
           test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18081/)" = "401"
           test "$(curl -s -u admin:testpass -o /dev/null -w '%{http_code}' http://127.0.0.1:18081/)" = "200"
+
+      - name: Test running version fingerprint
+        run: |
+          EXPECTED="$(git rev-parse --short=8 HEAD)"
+          curl -fsS -u admin:testpass 'http://127.0.0.1:18081/api/version' > /tmp/version.json
+          grep '"version":"0.5.1"' /tmp/version.json
+          grep "\"shortCommit\":\"$EXPECTED\"" /tmp/version.json
 
       - name: Test connection registry
         run: |
@@ -104,10 +121,19 @@ jobs:
             --data '{"schemaVersion":2,"apps":[],"connections":[]}' | grep '"saved":true'
           curl -fsS -u admin:testpass 'http://127.0.0.1:18081/api/workspace' | grep '"exists":true'
 
+      - name: Test Docker build fingerprint
+        run: |
+          EXPECTED="$(git rev-parse --short=8 HEAD)"
+          docker build -t invarture-app-studio:ci .
+          ACTUAL="$(docker run --rm --entrypoint node invarture-app-studio:ci -e \"process.stdout.write(require('./build-info.json').shortCommit || '')\")"
+          test "$ACTUAL" = "$EXPECTED"
+
       - name: Print diagnostics on failure
         if: failure()
         run: |
           echo '--- app studio ---'
           cat /tmp/app-studio.log || true
+          echo '--- version ---'
+          cat /tmp/version.json || true
           echo '--- mock SAP ---'
           cat /tmp/mock-sap.log || true
