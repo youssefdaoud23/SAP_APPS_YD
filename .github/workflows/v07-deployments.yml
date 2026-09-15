@@ -1,0 +1,170 @@
+name: V0.7 Deployment Governance
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  deployment-governance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Validate deployment modules
+        run: |
+          node --check api/deployments.js
+          node --check deployment-manager-v07.js
+          node --check api/audit.js
+          grep -q 'deployment-manager-v07.js' index.html
+          grep -q 'platform_deployments' lib/database.js
+          grep -q 'platform_environments' lib/database.js
+
+      - name: Build application image
+        run: docker build -t invarture-app-studio:v07-ci .
+
+      - name: Start PostgreSQL and App Studio
+        run: |
+          docker network create invarture-v07-ci
+          docker run -d --name invarture-v07-db --network invarture-v07-ci \
+            -e POSTGRES_DB=invarture \
+            -e POSTGRES_USER=invarture \
+            -e POSTGRES_PASSWORD=ci_v07_password \
+            postgres:17-alpine
+          for i in {1..40}; do
+            if docker exec invarture-v07-db pg_isready -U invarture -d invarture >/dev/null 2>&1; then break; fi
+            sleep 0.5
+          done
+          docker exec invarture-v07-db pg_isready -U invarture -d invarture
+
+          docker run -d --name invarture-v07-app --network invarture-v07-ci -p 18087:8081 \
+            -e WORKSPACE_STORAGE=postgres \
+            -e DATABASE_URL=postgresql://invarture:ci_v07_password@invarture-v07-db:5432/invarture \
+            invarture-app-studio:v07-ci
+          for i in {1..40}; do
+            if curl -fsS http://127.0.0.1:18087/healthz >/dev/null; then break; fi
+            sleep 0.5
+          done
+          curl -fsS http://127.0.0.1:18087/healthz | grep '"ok":true'
+
+      - name: Verify seeded environments
+        run: |
+          curl -fsS 'http://127.0.0.1:18087/api/deployments?action=environments' > /tmp/v07-envs.json
+          grep '"key":"DEV"' /tmp/v07-envs.json
+          grep '"key":"QAS"' /tmp/v07-envs.json
+          grep '"key":"PRD"' /tmp/v07-envs.json
+          grep '"stage":"production"' /tmp/v07-envs.json
+
+      - name: Create DEV deployment
+        run: |
+          cat > /tmp/v07-deploy.json <<'JSON'
+          {
+            "environmentKey":"DEV",
+            "versionLabel":"1.0.0",
+            "releaseNotes":"Initial governed deployment",
+            "application":{
+              "id":"ci-purchase-orders",
+              "name":"CI Purchase Orders",
+              "status":"published",
+              "pages":[{"id":"main","name":"Main","components":[{"id":"h1","type":"heading","text":"Purchase Orders"}]}]
+            }
+          }
+          JSON
+          curl -fsS -X POST 'http://127.0.0.1:18087/api/deployments?action=deploy' \
+            -H 'Content-Type: application/json' --data-binary @/tmp/v07-deploy.json > /tmp/v07-dev.json
+          grep '"environmentKey":"DEV"' /tmp/v07-dev.json
+          DEV_ID="$(node -p "require('/tmp/v07-dev.json').deployment.id")"
+          test -n "$DEV_ID"
+          echo "$DEV_ID" > /tmp/v07-dev-id
+          node -p "require('/tmp/v07-dev.json').deployment.checksum" > /tmp/v07-checksum
+
+      - name: Promote DEV to QAS and PRD
+        run: |
+          DEV_ID="$(cat /tmp/v07-dev-id)"
+          curl -fsS -X POST 'http://127.0.0.1:18087/api/deployments?action=promote' \
+            -H 'Content-Type: application/json' \
+            --data "{\"deploymentId\":\"$DEV_ID\",\"targetEnvironmentKey\":\"QAS\",\"releaseNotes\":\"QA promotion\"}" > /tmp/v07-qas.json
+          grep '"environmentKey":"QAS"' /tmp/v07-qas.json
+          QAS_ID="$(node -p "require('/tmp/v07-qas.json').deployment.id")"
+          test -n "$QAS_ID"
+          echo "$QAS_ID" > /tmp/v07-qas-id
+
+          curl -fsS -X POST 'http://127.0.0.1:18087/api/deployments?action=promote' \
+            -H 'Content-Type: application/json' \
+            --data "{\"deploymentId\":\"$QAS_ID\",\"targetEnvironmentKey\":\"PRD\",\"releaseNotes\":\"Production promotion\"}" > /tmp/v07-prd.json
+          grep '"environmentKey":"PRD"' /tmp/v07-prd.json
+          PRD_ID="$(node -p "require('/tmp/v07-prd.json').deployment.id")"
+          test -n "$PRD_ID"
+          echo "$PRD_ID" > /tmp/v07-prd-id
+
+          EXPECTED_CHECKSUM="$(cat /tmp/v07-checksum)"
+          test "$(node -p "require('/tmp/v07-qas.json').deployment.checksum")" = "$EXPECTED_CHECKSUM"
+          test "$(node -p "require('/tmp/v07-prd.json').deployment.checksum")" = "$EXPECTED_CHECKSUM"
+
+      - name: Block draft production deployments
+        run: |
+          cat > /tmp/v07-draft.json <<'JSON'
+          {
+            "environmentKey":"PRD",
+            "versionLabel":"draft-test",
+            "application":{
+              "id":"ci-draft-app",
+              "name":"CI Draft App",
+              "status":"draft",
+              "pages":[{"id":"main","name":"Main","components":[]}]
+            }
+          }
+          JSON
+          CODE="$(curl -s -o /tmp/v07-draft-error.json -w '%{http_code}' -X POST 'http://127.0.0.1:18087/api/deployments?action=deploy' -H 'Content-Type: application/json' --data-binary @/tmp/v07-draft.json)"
+          test "$CODE" = "409"
+          grep 'published application snapshot' /tmp/v07-draft-error.json
+
+      - name: Roll back production snapshot
+        run: |
+          PRD_ID="$(cat /tmp/v07-prd-id)"
+          curl -fsS -X POST 'http://127.0.0.1:18087/api/deployments?action=rollback' \
+            -H 'Content-Type: application/json' \
+            --data "{\"deploymentId\":\"$PRD_ID\",\"releaseNotes\":\"CI rollback verification\"}" > /tmp/v07-rollback.json
+          grep '"action":"rollback"' /tmp/v07-rollback.json
+          grep '"environmentKey":"PRD"' /tmp/v07-rollback.json
+          test "$(node -p "require('/tmp/v07-rollback.json').deployment.checksum")" = "$(cat /tmp/v07-checksum)"
+
+      - name: Verify history and latest environment state
+        run: |
+          curl -fsS 'http://127.0.0.1:18087/api/deployments?action=history&appId=ci-purchase-orders&limit=20' > /tmp/v07-history.json
+          test "$(node -p "require('/tmp/v07-history.json').deployments.length")" -eq 4
+          grep '"action":"deploy"' /tmp/v07-history.json
+          grep '"action":"promote"' /tmp/v07-history.json
+          grep '"action":"rollback"' /tmp/v07-history.json
+          curl -fsS 'http://127.0.0.1:18087/api/deployments?action=latest&appId=ci-purchase-orders' > /tmp/v07-latest.json
+          grep '"environmentKey":"DEV"' /tmp/v07-latest.json
+          grep '"environmentKey":"QAS"' /tmp/v07-latest.json
+          grep '"environmentKey":"PRD"' /tmp/v07-latest.json
+
+      - name: Test custom environment and aliases
+        run: |
+          curl -fsS -X POST 'http://127.0.0.1:18087/api/deployments?action=environment' \
+            -H 'Content-Type: application/json' \
+            --data '{"key":"UAT","name":"User Acceptance","stage":"test","sortOrder":25,"connectionAliases":{"SAP_PRIMARY":"server:sap-uat"}}' > /tmp/v07-uat.json
+          grep '"key":"UAT"' /tmp/v07-uat.json
+          grep 'server:sap-uat' /tmp/v07-uat.json
+          curl -fsS -X DELETE 'http://127.0.0.1:18087/api/deployments?action=environment&key=UAT' | grep '"deleted":true'
+
+      - name: Verify deployment audit trail
+        run: |
+          curl -fsS 'http://127.0.0.1:18087/api/audit?limit=100' > /tmp/v07-audit.json
+          grep 'deployment.created' /tmp/v07-audit.json
+          grep 'deployment.promoted' /tmp/v07-audit.json
+          grep 'deployment.rollback' /tmp/v07-audit.json
+          grep 'environment.saved' /tmp/v07-audit.json
+          grep 'environment.deleted' /tmp/v07-audit.json
+
+      - name: Cleanup
+        if: always()
+        run: |
+          docker rm -f invarture-v07-app invarture-v07-db 2>/dev/null || true
+          docker network rm invarture-v07-ci 2>/dev/null || true
