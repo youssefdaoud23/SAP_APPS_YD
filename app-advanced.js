@@ -115,16 +115,38 @@
     app.updatedAt=new Date().toISOString(); alert(`Remapped ${count} connection reference${count===1?'':'s'}.`); save(state);
   }
 
+  function previewApp(state, preview){
+    const name=preview?.querySelector('.runtime-bar strong')?.textContent?.trim();
+    return state?.apps?.find(a=>a.name===name) || current(state).app;
+  }
+
   function decorate(){
     const state=ws(); if(!state) return; const title=document.querySelector('.topbar-title h1')?.textContent?.trim();
     document.querySelectorAll('.app-card').forEach(card=>{
       const id=card.querySelector('[data-open-app]')?.dataset.openApp; const app=state.apps?.find(a=>a.id===id); if(!app) return;
-      card.querySelectorAll('[data-adv-badge]').forEach(x=>x.remove());
-      const meta=card.querySelector('.app-card-meta'); if(meta){ if(app.favorite) meta.insertAdjacentHTML('afterbegin','<span class="tag" data-adv-badge>★ Featured</span>'); if(app.launchpadGroup) meta.insertAdjacentHTML('beforeend',`<span class="tag" data-adv-badge>${esc(app.launchpadGroup)}</span>`); }
+      const signature=JSON.stringify([!!app.favorite,app.launchpadGroup||'',!!app.hiddenFromLaunchpad,title]);
+      if(card.dataset.advSignature!==signature){
+        card.dataset.advSignature=signature;
+        card.querySelectorAll('[data-adv-badge]').forEach(x=>x.remove());
+        const meta=card.querySelector('.app-card-meta');
+        if(meta){ if(app.favorite) meta.insertAdjacentHTML('afterbegin','<span class="tag" data-adv-badge>★ Featured</span>'); if(app.launchpadGroup) meta.insertAdjacentHTML('beforeend',`<span class="tag" data-adv-badge>${esc(app.launchpadGroup)}</span>`); }
+      }
       if(title==='Overview'&&app.hiddenFromLaunchpad) card.style.display='none'; else card.style.removeProperty('display');
     });
-    const {app}=current(state); if(title==='App Studio'&&app){ document.querySelectorAll('.device-frame,.runtime-preview').forEach(el=>{el.style.setProperty('--blue',app.runtimeAccent||'#2f78ed');el.style.setProperty('--blue-2',app.runtimeAccent||'#2f78ed');}); }
-    const preview=document.querySelector('.runtime-preview'); if(preview&&app){ const nav=preview.querySelector('.runtime-nav'); if(nav) nav.style.display=app.runtimeNavigation==='hidden'?'none':''; if(nav&&app.runtimeNavigation==='minimal') nav.querySelectorAll('button:not(.active)').forEach(b=>b.style.display='none'); }
+
+    const currentApp=current(state).app;
+    if(title==='App Studio'&&currentApp){ document.querySelectorAll('.device-frame').forEach(el=>{el.style.setProperty('--blue',currentApp.runtimeAccent||'#2f78ed');el.style.setProperty('--blue-2',currentApp.runtimeAccent||'#2f78ed');}); }
+
+    const preview=document.querySelector('.runtime-preview');
+    if(preview){
+      const app=previewApp(state,preview);
+      if(app){
+        preview.style.setProperty('--blue',app.runtimeAccent||'#2f78ed'); preview.style.setProperty('--blue-2',app.runtimeAccent||'#2f78ed');
+        const nav=preview.querySelector('.runtime-nav');
+        if(nav){ nav.style.display=app.runtimeNavigation==='hidden'?'none':''; nav.querySelectorAll('button').forEach(b=>b.style.removeProperty('display')); if(app.runtimeNavigation==='minimal') nav.querySelectorAll('button:not(.active)').forEach(b=>b.style.display='none'); }
+        if(app.startPageId){ const targetPage=(app.pages||[]).find(p=>p.id===app.startPageId); const target=[...(nav?.querySelectorAll('button')||[])].find(b=>b.textContent.trim()===targetPage?.name); if(target&&!target.classList.contains('active')){ target.click(); return; } }
+      }
+    }
   }
 
   document.addEventListener('click',e=>{
