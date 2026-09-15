@@ -2,12 +2,18 @@
   'use strict';
 
   const STORAGE_KEY = 'invarture-app-studio-v2';
+  const PREF_KEY = 'invarture-platform-preferences-v1';
   const API = '/api/sap';
   const inflight = new Map();
   let scheduled = false;
+  let refreshTimer = null;
 
   function workspace() {
     try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null'); } catch { return null; }
+  }
+
+  function preferences() {
+    try { return JSON.parse(localStorage.getItem(PREF_KEY) || '{}'); } catch { return {}; }
   }
 
   function currentPage(state) {
@@ -165,11 +171,19 @@
     schedule();
   }
 
+  function configureRefreshTimer() {
+    if (refreshTimer) clearInterval(refreshTimer);
+    refreshTimer = null;
+    const seconds = Number(preferences().liveRefresh ?? 15);
+    if (seconds > 0) refreshTimer = setInterval(forceRefresh, Math.max(5, seconds) * 1000);
+  }
+
   const observer = new MutationObserver(schedule);
   observer.observe(document.body, { childList: true, subtree: true });
-  window.addEventListener('storage', schedule);
+  window.addEventListener('storage', event => { if (!event.key || event.key === STORAGE_KEY || event.key === PREF_KEY) { configureRefreshTimer(); schedule(); } });
   window.addEventListener('focus', schedule);
   window.addEventListener('invarture:refresh-data', forceRefresh);
-  setInterval(schedule, 8000);
+  window.addEventListener('invarture:preferences', configureRefreshTimer);
+  configureRefreshTimer();
   schedule();
 })();
