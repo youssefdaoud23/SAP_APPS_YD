@@ -1,0 +1,73 @@
+name: App Studio CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  smoke-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Syntax checks
+        run: |
+          node --check app.js
+          node --check connection-center.js
+          node --check live-data.js
+          node --check server.js
+          node --check api/sap.js
+          node --check lib/sapConnector.js
+          node --check lib/loadEnv.js
+          node --check sw.js
+          node --check tests/mock-sap.js
+
+      - name: Start mock SAP and App Studio
+        env:
+          SAP_ALLOW_HTTP: "true"
+          SAP_CONNECTIONS_JSON: '[{"id":"mock","name":"Mock SAP","type":"OData V2","baseUrl":"http://127.0.0.1:18080/service/","auth":"basic","usernameEnv":"MOCK_USER","passwordEnv":"MOCK_PASS"}]'
+          MOCK_USER: test
+          MOCK_PASS: secret
+          PORT: "18081"
+        run: |
+          node tests/mock-sap.js > /tmp/mock-sap.log 2>&1 &
+          node server.js > /tmp/app-studio.log 2>&1 &
+          for i in {1..20}; do
+            if curl -fsS http://127.0.0.1:18081/ >/dev/null; then break; fi
+            sleep 0.25
+          done
+          curl -fsS http://127.0.0.1:18081/ >/dev/null
+
+      - name: Test connection registry
+        run: |
+          curl -fsS 'http://127.0.0.1:18081/api/sap?action=connections' | grep 'Mock SAP'
+
+      - name: Test health and metadata
+        run: |
+          curl -fsS 'http://127.0.0.1:18081/api/sap?action=health&id=mock' | grep '"ok":true'
+          curl -fsS 'http://127.0.0.1:18081/api/sap?action=metadata&id=mock' | grep 'Products'
+
+      - name: Test OData read
+        run: |
+          curl -fsSG 'http://127.0.0.1:18081/api/sap' \
+            --data-urlencode 'action=request' \
+            --data-urlencode 'id=mock' \
+            --data-urlencode 'path=Products?$top=5&$format=json' | grep 'Demo Product'
+
+      - name: Test SAP CSRF write flow
+        run: |
+          curl -fsS -X POST 'http://127.0.0.1:18081/api/sap?action=request&id=mock&path=Products' \
+            -H 'Content-Type: application/json' \
+            --data '{"Name":"Created"}' | grep 'P300'
+
+      - name: Print diagnostics on failure
+        if: failure()
+        run: |
+          echo '--- app studio ---'
+          cat /tmp/app-studio.log || true
+          echo '--- mock SAP ---'
+          cat /tmp/mock-sap.log || true
