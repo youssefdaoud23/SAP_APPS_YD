@@ -1,6 +1,6 @@
 (() => {
   'use strict';
-  const VERSION = '0.4.0';
+  const VERSION = '0.5.0';
   function apply() {
     document.querySelectorAll('.workspace-card span,.topbar .pill,.settings-card p').forEach(el => {
       if (/v0\.[0-9]+\.[0-9]+/.test(el.textContent || '')) el.textContent = el.textContent.replace(/v0\.[0-9]+\.[0-9]+/g, `v${VERSION}`);
