@@ -1,9 +1,10 @@
 (() => {
   'use strict';
 
-  const FALLBACK_VERSION = '0.5.2';
+  const FALLBACK_VERSION = '0.5.3';
   let buildInfo = null;
   let loading = false;
+  let applyQueued = false;
 
   function esc(v = '') {
     return String(v).replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
@@ -40,20 +41,39 @@
 
   function apply() {
     injectStyle();
-    document.documentElement.dataset.iasVersion = buildInfo?.version || FALLBACK_VERSION;
+    const currentVersion = buildInfo?.version || FALLBACK_VERSION;
+    document.documentElement.dataset.iasVersion = currentVersion;
     if (buildInfo?.shortCommit) document.documentElement.dataset.iasCommit = buildInfo.shortCommit;
 
+    const label = versionText();
     document.querySelectorAll('.workspace-card').forEach(card => {
       card.classList.add('ias-build-info-trigger');
       card.title = 'Click to view running build details';
       const span = card.querySelector('span');
-      if (span) span.innerHTML = `<span class="ias-build-dot"></span>${esc(versionText())} · Running build`;
+      const marker = `${label}|workspace`;
+      if (span && span.dataset.iasBuildMarker !== marker) {
+        span.dataset.iasBuildMarker = marker;
+        span.innerHTML = `<span class="ias-build-dot"></span>${esc(label)} · Running build`;
+      }
     });
 
     document.querySelectorAll('.topbar .pill').forEach(pill => {
       pill.classList.add('ias-build-info-trigger');
       pill.title = 'Running build. Click for commit details.';
-      pill.textContent = versionText();
+      const marker = `${label}|topbar`;
+      if (pill.dataset.iasBuildMarker !== marker) {
+        pill.dataset.iasBuildMarker = marker;
+        pill.textContent = label;
+      }
+    });
+  }
+
+  function scheduleApply() {
+    if (applyQueued) return;
+    applyQueued = true;
+    requestAnimationFrame(() => {
+      applyQueued = false;
+      apply();
     });
   }
 
@@ -96,7 +116,7 @@
         <div class="ias-build-row"><span>Built at</span><code>${esc(builtAt)}</code></div>
         <div class="ias-build-row"><span>Server environment</span><code>${esc(info.environment || 'unknown')}</code></div>
         <div class="ias-build-row"><span>Node runtime</span><code>${esc(info.node || 'unknown')}</code></div>
-        <div class="ias-build-note">For Docker, App Studio now listens on port <code>8081</code> inside the container and is exposed as <code>localhost:8081</code>. To verify the running code, compare this commit with <code>git rev-parse --short=8 HEAD</code>.</div>
+        <div class="ias-build-note">For Docker, App Studio listens on port <code>8081</code> inside the container and is exposed as <code>localhost:8081</code>. To verify the running code, compare this commit with <code>git rev-parse --short=8 HEAD</code>.</div>
       </div>
       <div class="ias-build-actions"><button class="btn" data-build-refresh>Refresh build info</button><button class="btn primary" data-build-copy>Copy fingerprint</button></div>
     </div>`;
@@ -116,7 +136,7 @@
   });
 
   document.addEventListener('keydown', event => { if (event.key === 'Escape') closeModal(); });
-  const observer = new MutationObserver(apply);
+  const observer = new MutationObserver(scheduleApply);
   observer.observe(document.body, { childList: true, subtree: true });
   apply();
   loadBuildInfo();
