@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   smoke-test:
@@ -19,8 +20,10 @@ jobs:
           node --check app.js
           node --check connection-center.js
           node --check live-data.js
+          node --check workspace-sync.js
           node --check server.js
           node --check api/sap.js
+          node --check api/workspace.js
           node --check lib/sapConnector.js
           node --check lib/loadEnv.js
           node --check sw.js
@@ -32,37 +35,52 @@ jobs:
           SAP_CONNECTIONS_JSON: '[{"id":"mock","name":"Mock SAP","type":"OData V2","baseUrl":"http://127.0.0.1:18080/service/","auth":"basic","usernameEnv":"MOCK_USER","passwordEnv":"MOCK_PASS"}]'
           MOCK_USER: test
           MOCK_PASS: secret
+          APP_STUDIO_USER: admin
+          APP_STUDIO_PASSWORD: testpass
+          WORKSPACE_FILE: /tmp/invarture-workspace.json
           PORT: "18081"
         run: |
           node tests/mock-sap.js > /tmp/mock-sap.log 2>&1 &
           node server.js > /tmp/app-studio.log 2>&1 &
           for i in {1..20}; do
-            if curl -fsS http://127.0.0.1:18081/ >/dev/null; then break; fi
+            if curl -fsS -u admin:testpass http://127.0.0.1:18081/ >/dev/null; then break; fi
             sleep 0.25
           done
-          curl -fsS http://127.0.0.1:18081/ >/dev/null
+          curl -fsS -u admin:testpass http://127.0.0.1:18081/ >/dev/null
+
+      - name: Test access protection
+        run: |
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18081/)" = "401"
+          test "$(curl -s -u admin:testpass -o /dev/null -w '%{http_code}' http://127.0.0.1:18081/)" = "200"
 
       - name: Test connection registry
         run: |
-          curl -fsS 'http://127.0.0.1:18081/api/sap?action=connections' | grep 'Mock SAP'
+          curl -fsS -u admin:testpass 'http://127.0.0.1:18081/api/sap?action=connections' | grep 'Mock SAP'
 
       - name: Test health and metadata
         run: |
-          curl -fsS 'http://127.0.0.1:18081/api/sap?action=health&id=mock' | grep '"ok":true'
-          curl -fsS 'http://127.0.0.1:18081/api/sap?action=metadata&id=mock' | grep 'Products'
+          curl -fsS -u admin:testpass 'http://127.0.0.1:18081/api/sap?action=health&id=mock' | grep '"ok":true'
+          curl -fsS -u admin:testpass 'http://127.0.0.1:18081/api/sap?action=metadata&id=mock' | grep 'Products'
 
       - name: Test OData read
         run: |
-          curl -fsSG 'http://127.0.0.1:18081/api/sap' \
+          curl -fsSG -u admin:testpass 'http://127.0.0.1:18081/api/sap' \
             --data-urlencode 'action=request' \
             --data-urlencode 'id=mock' \
             --data-urlencode 'path=Products?$top=5&$format=json' | grep 'Demo Product'
 
       - name: Test SAP CSRF write flow
         run: |
-          curl -fsS -X POST 'http://127.0.0.1:18081/api/sap?action=request&id=mock&path=Products' \
+          curl -fsS -u admin:testpass -X POST 'http://127.0.0.1:18081/api/sap?action=request&id=mock&path=Products' \
             -H 'Content-Type: application/json' \
             --data '{"Name":"Created"}' | grep 'P300'
+
+      - name: Test persistent workspace API
+        run: |
+          curl -fsS -u admin:testpass -X PUT 'http://127.0.0.1:18081/api/workspace' \
+            -H 'Content-Type: application/json' \
+            --data '{"schemaVersion":2,"apps":[],"connections":[]}' | grep '"saved":true'
+          curl -fsS -u admin:testpass 'http://127.0.0.1:18081/api/workspace' | grep '"exists":true'
 
       - name: Print diagnostics on failure
         if: failure()
