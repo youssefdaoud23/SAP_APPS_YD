@@ -41,6 +41,7 @@ jobs:
           node --check api/workspace.js
           node --check api/version.js
           node --check api/platform.js
+          node --check api/security.js
           node --check lib/sapConnector.js
           node --check lib/loadEnv.js
           node --check scripts/generate-build-info.js
@@ -152,7 +153,7 @@ jobs:
           node -e "const x=require('/tmp/docker-version.json'); if(x.version!==process.argv[1] || x.shortCommit!==process.argv[2]) { console.error(x); process.exit(1); }" "$EXPECTED_VERSION" "$EXPECTED_SHA"
           docker rm -f invarture-ci
 
-      - name: Test PostgreSQL workspace, revision conflicts and audit
+      - name: Test PostgreSQL workspace, identity records and audit
         run: |
           docker network create invarture-ci-net
           docker run -d --name invarture-ci-db --network invarture-ci-net \
@@ -199,8 +200,31 @@ jobs:
           test "$CODE" = "409"
           grep 'Workspace changed on the server' /tmp/workspace-conflict.json
 
+          curl -fsS -X POST 'http://127.0.0.1:18083/api/security?action=user' \
+            -H 'Content-Type: application/json' \
+            --data '{"username":"ci.developer","displayName":"CI Developer","roles":["developer"]}' > /tmp/security-user.json
+          USER_ID="$(node -p "require('/tmp/security-user.json').id")"
+          test -n "$USER_ID"
+          curl -fsS 'http://127.0.0.1:18083/api/security?action=users' > /tmp/security-users.json
+          grep 'ci.developer' /tmp/security-users.json
+          grep 'developer' /tmp/security-users.json
+
+          curl -fsS -X POST 'http://127.0.0.1:18083/api/security?action=group' \
+            -H 'Content-Type: application/json' \
+            --data '{"name":"CI Developers","roles":["viewer"]}' > /tmp/security-group.json
+          GROUP_ID="$(node -p "require('/tmp/security-group.json').id")"
+          test -n "$GROUP_ID"
+          curl -fsS -X POST 'http://127.0.0.1:18083/api/security?action=group-member' \
+            -H 'Content-Type: application/json' \
+            --data "{\"groupId\":\"$GROUP_ID\",\"userId\":\"$USER_ID\",\"enabled\":true}" | grep '"saved":true'
+          curl -fsS 'http://127.0.0.1:18083/api/security?action=summary' > /tmp/security-summary.json
+          grep 'CI Developers' /tmp/security-summary.json
+          grep '"memberCount":1' /tmp/security-summary.json
+
           test "$(docker exec invarture-ci-db psql -U invarture -d invarture -tAc 'SELECT COUNT(*) FROM platform_roles')" -ge 4
           test "$(docker exec invarture-ci-db psql -U invarture -d invarture -tAc "SELECT COUNT(*) FROM platform_audit_events WHERE event_type='workspace.updated'")" -ge 2
+          test "$(docker exec invarture-ci-db psql -U invarture -d invarture -tAc 'SELECT COUNT(*) FROM platform_users')" -eq 1
+          test "$(docker exec invarture-ci-db psql -U invarture -d invarture -tAc 'SELECT COUNT(*) FROM platform_groups')" -eq 1
 
           docker rm -f invarture-ci-pg invarture-ci-db
           docker network rm invarture-ci-net
@@ -220,6 +244,8 @@ jobs:
           cat /tmp/platform.json || true
           echo '--- workspace conflict ---'
           cat /tmp/workspace-conflict.json || true
+          echo '--- security summary ---'
+          cat /tmp/security-summary.json || true
           echo '--- mock SAP ---'
           cat /tmp/mock-sap.log || true
           docker logs invarture-ci-pg || true
