@@ -1,5 +1,8 @@
 'use strict';
 
+const { loadEnvFile } = require('./lib/loadEnv');
+loadEnvFile();
+
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
@@ -30,7 +33,7 @@ function serveStatic(req, res) {
   try { pathname = decodeURIComponent(new URL(req.url, 'http://localhost').pathname); }
   catch { res.statusCode = 400; return res.end('Bad request'); }
   if (pathname === '/') pathname = '/index.html';
-  const normalized = path.normalize(pathname).replace(/^(\.\.(\/|\\|$))+/, '');
+  const normalized = path.normalize(pathname).replace(/^[/\\]+/, '').replace(/^(\.\.(\/|\\|$))+/, '');
   const filePath = path.join(ROOT, normalized);
   if (!filePath.startsWith(ROOT)) { res.statusCode = 403; return res.end('Forbidden'); }
   fs.stat(filePath, (err, stat) => {
