@@ -9,6 +9,7 @@ WorkingDirectory=/opt/invarture-app-studio
 ExecStart=/usr/bin/node /opt/invarture-app-studio/server.js
 Environment=NODE_ENV=production
 Environment=PORT=8081
+Environment=WORKSPACE_FILE=/opt/invarture-app-studio/data/workspace.json
 Restart=on-failure
 RestartSec=3
 User=www-data
