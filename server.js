@@ -6,6 +6,7 @@ loadEnvFile();
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const sapApi = require('./api/sap');
 
 const PORT = Number(process.env.PORT || 8080);
@@ -28,6 +29,25 @@ function applySecurityHeaders(res) {
   res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
 }
 
+function authRequired() {
+  return Boolean(process.env.APP_STUDIO_USER && process.env.APP_STUDIO_PASSWORD);
+}
+
+function authorized(req) {
+  if (!authRequired()) return true;
+  const supplied = String(req.headers.authorization || '');
+  const expected = `Basic ${Buffer.from(`${process.env.APP_STUDIO_USER}:${process.env.APP_STUDIO_PASSWORD}`).toString('base64')}`;
+  const a = Buffer.from(supplied); const b = Buffer.from(expected);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+function demandAuth(res) {
+  res.statusCode = 401;
+  res.setHeader('WWW-Authenticate', 'Basic realm="Invarture App Studio", charset="UTF-8"');
+  res.setHeader('Cache-Control', 'no-store');
+  res.end('Authentication required');
+}
+
 function serveStatic(req, res) {
   let pathname;
   try { pathname = decodeURIComponent(new URL(req.url, 'http://localhost').pathname); }
@@ -46,11 +66,13 @@ function serveStatic(req, res) {
 
 const server = http.createServer(async (req, res) => {
   applySecurityHeaders(res);
+  if (!authorized(req)) return demandAuth(res);
   if (req.url.startsWith('/api/sap')) return sapApi(req, res);
   return serveStatic(req, res);
 });
 
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`Invarture App Studio listening on http://0.0.0.0:${PORT}`);
+  console.log(authRequired() ? 'HTTP Basic protection is enabled.' : 'HTTP Basic protection is disabled. Set APP_STUDIO_USER and APP_STUDIO_PASSWORD before exposing the service.');
   if (!process.env.SAP_CONNECTIONS_JSON) console.log('SAP_CONNECTIONS_JSON is not set: Connection Center will show no server-side SAP connections.');
 });
