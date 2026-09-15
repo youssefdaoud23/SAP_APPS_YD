@@ -1,27 +1,62 @@
-# Invarture App Studio - MVP
+# Invarture App Studio
 
-A clean-room, Invarture-branded proof of concept for an SAP-focused application platform intended to evolve toward an alternative workflow to Neptune DXP for internal/customer projects.
+Invarture App Studio is a clean-room, SAP-focused low-code application builder prototype. The goal is to create an open, self-hosted workflow that can progressively replace the parts of Neptune DXP that are most useful for Invarture projects, without copying Neptune proprietary code.
 
-## What is working now
+## Current test build - v0.2.0
 
-- Invarture-branded launchpad and application registry
-- Visual App Studio with reusable components
-- Desktop, tablet, and mobile canvas preview
-- Component property editing and reordering
-- App JSON import/export
-- Draft/published state and launchpad preview
-- SAP OData/REST connection registry
+This version is a browser-based MVP with no package install or build step.
+
+### Working now
+
+- Invarture-branded workspace and launchpad
+- Application registry with draft/published/archived states
+- Multi-page applications
+- Visual App Studio
+- Drag-and-drop component insertion and reordering
+- Application tree and component selection
+- Desktop, tablet and mobile preview widths
+- Component property inspector
+- App/page settings inspector
+- 19 reusable component types across basic, forms, data, layout and media categories
+- OData V2, OData V4 and REST data-source registry
+- Component data-source and binding-path properties
+- Version snapshots and restore
+- Application JSON import/export
+- Full-workspace JSON import/export
+- Runtime preview with application page navigation
 - Browser-local persistence using `localStorage`
-- PWA shell/service worker when served over HTTP(S)
-- No build step and no package dependencies
+- PWA service worker and manifest when served over HTTP(S)
+- Vercel static deployment configuration
 
-## Important MVP boundary
+### Component library
 
-This version is intentionally safe for testing. Data-source "Validate" checks the configuration locally and does **not** transmit credentials or call the SAP endpoint. Real OData/RFC authentication and server-side proxying are the next backend milestone.
+Basic: Heading, Text, Button, Divider, Spacer
 
-## Test locally
+Forms: Input, Text area, Select, Checkbox, Switch, Date
 
-Any static server works. For example:
+Data: KPI, Table, Chart
+
+Layout: Card, Toolbar, Tabs, Info strip
+
+Media: Image
+
+## Important security boundary
+
+This build intentionally does **not** store SAP passwords, bearer tokens or other secrets in browser storage. Data-source validation currently validates configuration only.
+
+Production SAP connectivity should be implemented through a server-side Invarture connector that:
+
+1. stores credentials in server-side environment variables or a secrets vault;
+2. handles OData V2/V4 authentication;
+3. proxies requests to SAP to avoid CORS and browser credential exposure;
+4. enforces application/user authorization;
+5. records auditable connection and deployment activity.
+
+Do not place production SAP credentials directly into this frontend.
+
+## Run locally
+
+You can open `index.html` directly for basic testing, but HTTP is recommended so the service worker can run.
 
 ```bash
 python -m http.server 8080
@@ -33,32 +68,52 @@ Then open:
 http://localhost:8080
 ```
 
-You can also open `index.html` directly. The core Studio works; the service worker requires HTTP(S).
-
-## Test flow
+## Suggested test flow
 
 1. Open **App Studio**.
-2. Add components from the left palette.
-3. Select a component and edit properties on the right.
-4. Change Desktop / Tablet / Mobile preview.
-5. Click **Preview**.
-6. Export the application JSON.
-7. Add a test endpoint under **Data Sources**.
-8. Publish/unpublish the app and check it from the **Launchpad**.
+2. Drag components from the palette onto the canvas.
+3. Reorder components using drag-and-drop or the move buttons.
+4. Select a component and modify its properties.
+5. Add another page to the application.
+6. Switch Desktop / Tablet / Mobile preview.
+7. Configure an OData source in **Data Sources**.
+8. Bind a Table or KPI to that source and enter a binding path.
+9. Create a version snapshot.
+10. Preview and publish the application.
+11. Export the application JSON.
 
 ## Architecture direction
 
-The current build is a dependency-free frontend MVP. Planned next layers:
+The next major milestone is the secure backend layer:
 
-1. Node/TypeScript backend and PostgreSQL persistence
-2. Real SAP OData V2/V4 proxy with secure credential handling
-3. OIDC/SAML and role-based authorization
-4. Schema-based bindings and event/action editor
-5. SAP metadata browser and service import
-6. Versioning, DEV/TEST/PROD promotion, audit history
-7. Offline data synchronization
-8. Optional ABAP-side connector for BAPIs/RFC/custom classes
+```text
+Browser / Invarture App Studio
+              |
+              v
+      Invarture API Gateway
+              |
+       +------+------+-------+
+       |             |       |
+   OData V2      OData V4   REST
+       |             |       |
+       +-------------+-------+
+                     |
+                    SAP
+```
+
+Planned stages:
+
+1. Node.js/TypeScript API and PostgreSQL persistence
+2. Secure OData V2/V4 proxy and `$metadata` browser
+3. Entity-set/field binding wizard
+4. OIDC/SAML/Microsoft Entra ID authentication and RBAC
+5. Real application users, groups and launchpad roles
+6. DEV/TEST/PROD environments and promotion workflow
+7. Server-side application/version storage and audit history
+8. Event/action editor and reusable building blocks
+9. Offline/PWA data synchronization
+10. Optional SAP-side ABAP connector for BAPIs, RFCs and custom classes
 
 ## Branding
 
-The UI uses an Invarture-inspired navy/blue theme and references the official Invarture logo asset hosted on `invarture.com`.
+The interface uses an Invarture-inspired navy/blue theme and loads the Invarture logo from the official Invarture website, with a text fallback if the remote image cannot be loaded.
