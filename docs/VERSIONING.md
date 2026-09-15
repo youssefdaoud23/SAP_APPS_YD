@@ -2,48 +2,44 @@
 
 Invarture App Studio exposes the exact product version and Git commit that are running on the server.
 
-## What you should see in the UI
+## Current baseline
 
-The sidebar workspace card and the top bar display a build badge in this form:
+The current deployment baseline is **v0.5.2** and uses port **8081** everywhere.
+
+The sidebar workspace card and top bar display a build badge like:
 
 ```text
-v0.5.1 · 86c0d89d
+v0.5.2 · 1234abcd
 ```
 
-The first value is the product version. The second value is the first 8 characters of the Git commit that was stamped into the running Docker image.
+The first value is the product version. The second is the first 8 characters of the Git commit stamped into the running Docker image.
 
-Click the build badge to open **Running build** details. The dialog shows:
+Click the badge to open **Running build** details.
 
-- product version
-- build fingerprint
-- full Git commit
-- commit source
-- build timestamp
-- server environment
-- Node.js runtime
-
-## Normal Ubuntu update
+## Normal Ubuntu/WSL update
 
 ```bash
-git pull && docker compose up -d --build
+git pull
+sudo docker compose up -d --build
 ```
 
-If your repository requires elevated permissions, use the same command pattern with the permissions appropriate to your checkout.
-
 ## Verify host checkout against the running application
-
-From the repository directory:
 
 ```bash
 git rev-parse --short=8 HEAD
 ```
 
-The result should equal the commit shown in the App Studio build badge.
-
-You can also query the server directly:
+Then query the running server:
 
 ```bash
-curl -u YOUR_APP_USER:YOUR_APP_PASSWORD http://127.0.0.1:8080/api/version
+curl http://127.0.0.1:8081/healthz
+curl http://127.0.0.1:8081/api/version
+```
+
+If HTTP Basic protection is enabled, use:
+
+```bash
+curl -u YOUR_APP_USER:YOUR_APP_PASSWORD http://127.0.0.1:8081/api/version
 ```
 
 Example response:
@@ -51,10 +47,10 @@ Example response:
 ```json
 {
   "product": "Invarture App Studio",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "commit": "full-40-character-git-sha",
   "shortCommit": "1234abcd",
-  "fingerprint": "v0.5.1+1234abcd",
+  "fingerprint": "v0.5.2+1234abcd",
   "commitSource": "docker-build",
   "builtAt": "2026-09-15T16:00:00.000Z",
   "environment": "production",
@@ -62,36 +58,57 @@ Example response:
 }
 ```
 
-Every HTTP response from the self-hosted Node server also contains:
+The short SHA from Git, the UI badge and `/api/version` must match.
+
+## Docker port model
+
+The container now uses the same port internally and externally:
 
 ```text
-X-Invarture-Version: 0.5.1
+Browser -> localhost:8081 -> Docker :8081 -> Node :8081
+```
+
+There is no 8080 translation in the default deployment.
+
+## Container verification
+
+```bash
+sudo docker compose ps
+sudo docker compose exec -T invarture-app-studio cat /app/build-info.json
+```
+
+`docker compose ps` should eventually report the container as healthy and show a mapping equivalent to:
+
+```text
+0.0.0.0:8081->8081/tcp
+```
+
+## HTTP headers
+
+Every response from the self-hosted Node server includes:
+
+```text
+X-Invarture-Version: 0.5.2
 X-Invarture-Commit: 1234abcd
 ```
 
-For example:
+## Docker build fingerprint
 
-```bash
-curl -I -u YOUR_APP_USER:YOUR_APP_PASSWORD http://127.0.0.1:8080/
-```
+During the Docker build, `scripts/generate-build-info.js` reads the Git revision from the build context and writes `build-info.json`. The Dockerfile then removes `.git` before the image is finalized.
 
-## Why Docker shows the correct commit
-
-During `docker compose up -d --build`, the Dockerfile runs `scripts/generate-build-info.js` while the Git metadata is still available in the build context. It writes `build-info.json` into the image and then removes `.git` from the production image.
-
-This gives the running container an immutable build fingerprint without shipping the complete Git repository metadata.
+The repository includes `.dockerignore`, which excludes `.env`, local data and logs from the build context so secrets are not baked into the image.
 
 ## If the browser appears stale
 
-First compare `/api/version` with `git rev-parse --short=8 HEAD`.
+First verify that `/healthz` and `/api/version` work on port 8081.
 
-If those match but the UI looks old, hard-refresh the browser:
+Then compare `/api/version` with:
 
-```text
-Ctrl + Shift + R
+```bash
+git rev-parse --short=8 HEAD
 ```
 
-The service worker uses a versioned cache and API responses are never served from the PWA cache.
+If those match but the UI still looks old, hard-refresh or clear the service worker/site data. The current service worker uses a network-first strategy with a versioned cache.
 
 ## Source of truth
 
