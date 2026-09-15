@@ -7,3 +7,10 @@ services:
       - "8080:8080"
     env_file:
       - .env
+    environment:
+      WORKSPACE_FILE: /app/data/workspace.json
+    volumes:
+      - app-studio-data:/app/data
+
+volumes:
+  app-studio-data:
