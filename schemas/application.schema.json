@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://invarture.local/schemas/application.schema.json",
+  "title": "Invarture App Studio Application",
+  "type": "object",
+  "required": ["id", "name", "pages"],
+  "properties": {
+    "id": { "type": "string", "minLength": 1 },
+    "name": { "type": "string", "minLength": 1 },
+    "description": { "type": "string" },
+    "status": { "enum": ["draft", "published", "archived"] },
+    "tags": { "type": "array", "items": { "type": "string" } },
+    "startPageId": { "type": "string" },
+    "dataMode": { "enum": ["live", "mock"] },
+    "variables": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "type", "scope"],
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+          "type": { "enum": ["string", "number", "boolean", "date", "json"] },
+          "scope": { "enum": ["application", "page", "session"] },
+          "defaultValue": {},
+          "persist": { "type": "boolean" }
+        },
+        "additionalProperties": true
+      }
+    },
+    "pages": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "components"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "name": { "type": "string", "minLength": 1 },
+          "title": { "type": "string" },
+          "components": { "type": "array", "items": { "$ref": "#/$defs/component" } }
+        },
+        "additionalProperties": true
+      }
+    },
+    "versions": { "type": "array" }
+  },
+  "$defs": {
+    "component": {
+      "type": "object",
+      "required": ["id", "type"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "type": { "type": "string", "minLength": 1 },
+        "dataSource": { "type": "string" },
+        "binding": { "type": "string" },
+        "bindingMode": { "enum": ["oneWay", "twoWay", "list", "context"] },
+        "bindingFallback": {},
+        "action": {
+          "type": "object",
+          "properties": {
+            "type": { "type": "string" },
+            "dataSource": { "type": "string" },
+            "path": { "type": "string" },
+            "body": { "type": "string" },
+            "pageId": { "type": "string" },
+            "url": { "type": "string" }
+          },
+          "additionalProperties": true
+        },
+        "slots": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": { "$ref": "#/$defs/component" }
+          }
+        },
+        "children": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/component" }
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}
