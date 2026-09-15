@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const FALLBACK_VERSION = '0.5.1';
+  const FALLBACK_VERSION = '0.5.2';
   let buildInfo = null;
   let loading = false;
 
@@ -96,7 +96,7 @@
         <div class="ias-build-row"><span>Built at</span><code>${esc(builtAt)}</code></div>
         <div class="ias-build-row"><span>Server environment</span><code>${esc(info.environment || 'unknown')}</code></div>
         <div class="ias-build-row"><span>Node runtime</span><code>${esc(info.node || 'unknown')}</code></div>
-        <div class="ias-build-note">To verify the pull on your Ubuntu host, run <code>git rev-parse --short=8 HEAD</code>. The result should match the commit shown above after <code>docker compose up -d --build</code>.</div>
+        <div class="ias-build-note">For Docker, App Studio now listens on port <code>8081</code> inside the container and is exposed as <code>localhost:8081</code>. To verify the running code, compare this commit with <code>git rev-parse --short=8 HEAD</code>.</div>
       </div>
       <div class="ias-build-actions"><button class="btn" data-build-refresh>Refresh build info</button><button class="btn primary" data-build-copy>Copy fingerprint</button></div>
     </div>`;
