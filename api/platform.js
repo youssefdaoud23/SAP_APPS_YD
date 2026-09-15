@@ -15,8 +15,9 @@ function send(res, status, body) {
 module.exports = async function platformHandler(req, res) {
   if (req.method !== 'GET') return send(res, 405, { error: 'Only GET is supported' });
   try {
-    const [storage, db, security] = await Promise.all([
+    const [storage, workspace, db, security] = await Promise.all([
       workspaceStore.status(),
+      workspaceStore.get(),
       database.status(),
       database.securitySummary()
     ]);
@@ -25,7 +26,12 @@ module.exports = async function platformHandler(req, res) {
       product: build.product,
       version: build.version,
       commit: build.shortCommit || null,
-      storage,
+      storage: {
+        ...storage,
+        workspaceExists: workspace.exists,
+        revision: workspace.revision,
+        updatedAt: workspace.updatedAt
+      },
       database: db,
       security: {
         authMode: req.principal?.authMode || 'unknown',
@@ -38,6 +44,7 @@ module.exports = async function platformHandler(req, res) {
         optimisticLocking: true,
         workspaceRevisions: storage.mode === 'postgres',
         auditEvents: db.connected === true,
+        persistentIdentityMappings: db.connected === true,
         groupsAndRolesSchema: db.connected === true,
         oidc: false
       }
