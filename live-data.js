@@ -147,10 +147,12 @@
 
   function hydratePreview() {
     const state = workspace(); if (!state) return;
-    const preview = document.querySelector('.runtime-preview .runtime-body'); if (!preview) return;
-    const app = state.apps?.find(a => a.id === state.currentAppId); if (!app || app.dataMode === 'mock') return;
-    const activeText = document.querySelector('.runtime-preview .runtime-nav button.active')?.textContent?.trim();
-    const page = app.pages?.find(p => p.name === activeText) || app.pages?.find(p => p.id === state.currentPageId) || app.pages?.[0];
+    const previewRoot = document.querySelector('.runtime-preview');
+    const preview = previewRoot?.querySelector('.runtime-body'); if (!preview) return;
+    const appName = previewRoot.querySelector('.runtime-bar strong')?.textContent?.trim();
+    const app = state.apps?.find(a => a.name === appName) || state.apps?.find(a => a.id === state.currentAppId); if (!app || app.dataMode === 'mock') return;
+    const activeText = previewRoot.querySelector('.runtime-nav button.active')?.textContent?.trim();
+    const page = app.pages?.find(p => p.name === activeText) || app.pages?.find(p => p.id === app.startPageId) || app.pages?.[0];
     if (!page) return;
     [...preview.children].forEach((root, i) => {
       const c = page.components[i]; if (c && serverConnectionId(c)) hydrateRoot(root, c);
