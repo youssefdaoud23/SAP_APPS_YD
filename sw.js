@@ -1,5 +1,5 @@
-const CACHE = 'invarture-app-studio-v5';
-const ASSETS = ['./', './index.html', './styles.css', './app.js', './connection-center.js', './live-data.js', './workspace-sync.js', './manifest.webmanifest'];
+const CACHE = 'invarture-app-studio-v6';
+const ASSETS = ['./', './index.html', './styles.css', './app.js', './connection-center.js', './live-data.js', './workspace-sync.js', './platform-version.js', './manifest.webmanifest'];
 self.addEventListener('install', event => event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(ASSETS)).then(() => self.skipWaiting())));
 self.addEventListener('activate', event => event.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim())));
 self.addEventListener('fetch', event => {
