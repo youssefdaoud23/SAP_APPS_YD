@@ -12,7 +12,7 @@ const workspaceApi = require('./api/workspace');
 const versionApi = require('./api/version');
 const { getBuildInfo } = require('./lib/buildInfo');
 
-const PORT = Number(process.env.PORT || 8080);
+const PORT = Number(process.env.PORT || 8081);
 const ROOT = __dirname;
 const BUILD_INFO = getBuildInfo(ROOT);
 const MIME = {
@@ -54,6 +54,13 @@ function demandAuth(res) {
   res.end('Authentication required');
 }
 
+function health(res) {
+  res.statusCode = 200;
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-store');
+  res.end(JSON.stringify({ ok: true, version: BUILD_INFO.version, commit: BUILD_INFO.shortCommit || null }));
+}
+
 function serveStatic(req, res) {
   let pathname;
   try { pathname = decodeURIComponent(new URL(req.url, 'http://localhost').pathname); }
@@ -64,14 +71,20 @@ function serveStatic(req, res) {
   if (!filePath.startsWith(ROOT)) { res.statusCode = 403; return res.end('Forbidden'); }
   fs.stat(filePath, (err, stat) => {
     if (err || !stat.isFile()) { res.statusCode = 404; return res.end('Not found'); }
-    res.setHeader('Content-Type', MIME[path.extname(filePath)] || 'application/octet-stream');
-    if (path.basename(filePath) === 'sw.js' || path.basename(filePath) === 'index.html') res.setHeader('Cache-Control', 'no-cache');
+    const ext = path.extname(filePath);
+    res.setHeader('Content-Type', MIME[ext] || 'application/octet-stream');
+    if (['.html', '.js', '.css', '.webmanifest'].includes(ext) || path.basename(filePath) === 'sw.js') {
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+    }
     fs.createReadStream(filePath).pipe(res);
   });
 }
 
 const server = http.createServer(async (req, res) => {
   applySecurityHeaders(res);
+  if (req.url === '/healthz' || req.url.startsWith('/healthz?')) return health(res);
   if (!authorized(req)) return demandAuth(res);
   if (req.url.startsWith('/api/version')) return versionApi(req, res);
   if (req.url.startsWith('/api/sap')) return sapApi(req, res);
