@@ -123,6 +123,24 @@ async function listGroups() {
   return result.rows;
 }
 
+async function listGroupMembers(groupId) {
+  const id = clean(groupId, 80);
+  if (!id) throw Object.assign(new Error('groupId is required.'), { statusCode: 400 });
+  const group = await database.getPool().query('SELECT group_id, name FROM platform_groups WHERE group_id=$1', [id]);
+  if (!group.rowCount) throw Object.assign(new Error('Group not found.'), { statusCode: 404 });
+  const result = await database.getPool().query(`
+    SELECT u.user_id AS "id", u.username, u.display_name AS "displayName", u.email,
+           COALESCE(array_agg(ur.role_key ORDER BY ur.role_key) FILTER (WHERE ur.role_key IS NOT NULL), '{}') AS roles
+    FROM platform_group_members gm
+    JOIN platform_users u ON u.user_id=gm.user_id
+    LEFT JOIN platform_user_roles ur ON ur.user_id=u.user_id
+    WHERE gm.group_id=$1
+    GROUP BY u.user_id
+    ORDER BY lower(u.username)
+  `, [id]);
+  return { group: { id: group.rows[0].group_id, name: group.rows[0].name }, members: result.rows };
+}
+
 async function createGroup(req) {
   const input = await body(req);
   const name = clean(input.name, 160);
@@ -175,6 +193,7 @@ async function setGroupMember(req) {
   const groupId = clean(input.groupId, 80);
   const userId = clean(input.userId, 80);
   const enabled = input.enabled !== false;
+  if (!groupId || !userId) throw Object.assign(new Error('groupId and userId are required.'), { statusCode: 400 });
   if (enabled) {
     await database.getPool().query('INSERT INTO platform_group_members(group_id,user_id) VALUES ($1,$2) ON CONFLICT DO NOTHING', [groupId, userId]);
   } else {
@@ -195,6 +214,7 @@ module.exports = async function securityHandler(req, res) {
     }
     if (req.method === 'GET' && action === 'users') return send(res, 200, { users: await listUsers() });
     if (req.method === 'GET' && action === 'groups') return send(res, 200, { groups: await listGroups() });
+    if (req.method === 'GET' && action === 'group-members') return send(res, 200, await listGroupMembers(url.searchParams.get('groupId')));
     if (req.method === 'POST' && action === 'user') return send(res, 201, { created: true, id: await createUser(req) });
     if (req.method === 'POST' && action === 'user-role') { await setUserRole(req); return send(res, 200, { saved: true }); }
     if (req.method === 'DELETE' && action === 'user') { await deleteUser(req, clean(url.searchParams.get('id'), 80)); return send(res, 200, { deleted: true }); }
