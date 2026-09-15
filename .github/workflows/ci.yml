@@ -21,6 +21,7 @@ jobs:
           node --check connection-center.js
           node --check live-data.js
           node --check workspace-sync.js
+          node --check action-designer.js
           node --check platform-version.js
           node --check server.js
           node --check api/sap.js
