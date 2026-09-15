@@ -138,7 +138,7 @@
 
   function hydrateStudio() {
     const state = workspace(); if (!state) return;
-    const { page } = currentPage(state); if (!page) return;
+    const { app, page } = currentPage(state); if (!page || app?.dataMode === 'mock') return;
     document.querySelectorAll('.component-wrap[data-component-id]').forEach(root => {
       const c = page.components.find(x => x.id === root.dataset.componentId);
       if (c && serverConnectionId(c)) hydrateRoot(root, c);
@@ -148,7 +148,7 @@
   function hydratePreview() {
     const state = workspace(); if (!state) return;
     const preview = document.querySelector('.runtime-preview .runtime-body'); if (!preview) return;
-    const app = state.apps?.find(a => a.id === state.currentAppId); if (!app) return;
+    const app = state.apps?.find(a => a.id === state.currentAppId); if (!app || app.dataMode === 'mock') return;
     const activeText = document.querySelector('.runtime-preview .runtime-nav button.active')?.textContent?.trim();
     const page = app.pages?.find(p => p.name === activeText) || app.pages?.find(p => p.id === state.currentPageId) || app.pages?.[0];
     if (!page) return;
