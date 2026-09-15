@@ -21,6 +21,7 @@ jobs:
           node --check connection-center.js
           node --check live-data.js
           node --check workspace-sync.js
+          node --check platform-version.js
           node --check server.js
           node --check api/sap.js
           node --check api/workspace.js
@@ -32,7 +33,7 @@ jobs:
       - name: Start mock SAP and App Studio
         env:
           SAP_ALLOW_HTTP: "true"
-          SAP_CONNECTIONS_JSON: '[{"id":"mock","name":"Mock SAP","type":"OData V2","baseUrl":"http://127.0.0.1:18080/service/","auth":"basic","usernameEnv":"MOCK_USER","passwordEnv":"MOCK_PASS"}]'
+          SAP_CONNECTIONS_JSON: '[{"id":"mock","name":"Mock SAP","type":"OData V2","baseUrl":"http://127.0.0.1:18080/service/","auth":"basic","usernameEnv":"MOCK_USER","passwordEnv":"MOCK_PASS","sapClient":"100","sapLanguage":"EN"}]'
           MOCK_USER: test
           MOCK_PASS: secret
           APP_STUDIO_USER: admin
@@ -56,6 +57,7 @@ jobs:
       - name: Test connection registry
         run: |
           curl -fsS -u admin:testpass 'http://127.0.0.1:18081/api/sap?action=connections' | grep 'Mock SAP'
+          curl -fsS -u admin:testpass 'http://127.0.0.1:18081/api/sap?action=connections' | grep '"sapClient":"100"'
 
       - name: Test health and metadata
         run: |
