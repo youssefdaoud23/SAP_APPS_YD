@@ -9,6 +9,8 @@ const path = require('path');
 const crypto = require('crypto');
 const sapApi = require('./api/sap');
 const workspaceApi = require('./api/workspace');
+const versionApi = require('./api/version');
+const { getBuildInfo } = require('./lib/buildInfo');
 
 const PORT = Number(process.env.PORT || 8080);
 const ROOT = __dirname;
@@ -60,7 +62,7 @@ function serveStatic(req, res) {
   fs.stat(filePath, (err, stat) => {
     if (err || !stat.isFile()) { res.statusCode = 404; return res.end('Not found'); }
     res.setHeader('Content-Type', MIME[path.extname(filePath)] || 'application/octet-stream');
-    if (path.basename(filePath) === 'sw.js') res.setHeader('Cache-Control', 'no-cache');
+    if (path.basename(filePath) === 'sw.js' || path.basename(filePath) === 'index.html') res.setHeader('Cache-Control', 'no-cache');
     fs.createReadStream(filePath).pipe(res);
   });
 }
@@ -68,13 +70,17 @@ function serveStatic(req, res) {
 const server = http.createServer(async (req, res) => {
   applySecurityHeaders(res);
   if (!authorized(req)) return demandAuth(res);
+  if (req.url.startsWith('/api/version')) return versionApi(req, res);
   if (req.url.startsWith('/api/sap')) return sapApi(req, res);
   if (req.url.startsWith('/api/workspace')) return workspaceApi(req, res);
   return serveStatic(req, res);
 });
 
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`Invarture App Studio listening on http://0.0.0.0:${PORT}`);
+  const build = getBuildInfo(ROOT);
+  console.log(`Invarture App Studio ${build.fingerprint} listening on http://0.0.0.0:${PORT}`);
+  if (build.commit) console.log(`Running Git commit: ${build.commit}`);
+  else console.log('Git commit metadata is unavailable for this runtime.');
   console.log(authRequired() ? 'HTTP Basic protection is enabled.' : 'HTTP Basic protection is disabled. Set APP_STUDIO_USER and APP_STUDIO_PASSWORD before exposing the service.');
   if (!process.env.SAP_CONNECTIONS_JSON) console.log('SAP_CONNECTIONS_JSON is not set: Connection Center will show no server-side SAP connections.');
   if (!process.env.WORKSPACE_FILE) console.log('WORKSPACE_FILE is not set: server workspace sync is disabled.');
