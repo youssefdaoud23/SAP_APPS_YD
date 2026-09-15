@@ -1,4 +1,4 @@
-const CACHE = 'invarture-app-studio-v10';
+const CACHE = 'invarture-app-studio-v11';
 const ASSETS = [
   './',
   './index.html',
@@ -8,6 +8,7 @@ const ASSETS = [
   './v05-preload.js',
   './developer-tools.js',
   './app.js',
+  './v05-bootstrap.js',
   './connection-center.js',
   './runtime-data-v05.js',
   './workspace-sync.js',
