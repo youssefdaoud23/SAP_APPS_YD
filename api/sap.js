@@ -16,8 +16,13 @@ function json(res, status, body) {
 }
 
 async function readBody(req) {
+  if (req.body != null) {
+    if (Buffer.isBuffer(req.body)) return req.body;
+    if (typeof req.body === 'string') return Buffer.from(req.body);
+    return Buffer.from(JSON.stringify(req.body));
+  }
   const chunks = [];
-  for await (const chunk of req) chunks.push(chunk);
+  for await (const chunk of req) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   return Buffer.concat(chunks);
 }
 
