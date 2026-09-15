@@ -15,7 +15,7 @@ jobs:
         with:
           node-version: 22
 
-      - name: Syntax checks
+      - name: Syntax and compose checks
         run: |
           node --check lib/platformModel.js
           node --check lib/buildInfo.js
@@ -42,6 +42,8 @@ jobs:
           node --check sw.js
           node --check tests/mock-sap.js
           node --check tests/platform-model.test.js
+          docker compose config >/tmp/compose-config.yml
+          grep -q '8081' /tmp/compose-config.yml
           grep -q 'lib/platformModel.js' index.html
           grep -q 'v05-bootstrap.js' index.html
           grep -q 'runtime-data-v05.js' index.html
@@ -57,7 +59,7 @@ jobs:
         run: |
           node scripts/generate-build-info.js
           EXPECTED="$(git rev-parse --short=8 HEAD)"
-          node -e "const x=require('./build-info.json'); if(x.version!=='0.5.1') process.exit(1); if(x.shortCommit!=='$EXPECTED') { console.error(x.shortCommit, '$EXPECTED'); process.exit(1); }"
+          node -e "const x=require('./build-info.json'); if(x.version!=='0.5.2') process.exit(1); if(x.shortCommit!=='$EXPECTED') { console.error(x.shortCommit, '$EXPECTED'); process.exit(1); }"
           rm -f build-info.json
 
       - name: Start mock SAP and App Studio
@@ -74,10 +76,10 @@ jobs:
           node tests/mock-sap.js > /tmp/mock-sap.log 2>&1 &
           node server.js > /tmp/app-studio.log 2>&1 &
           for i in {1..20}; do
-            if curl -fsS -u admin:testpass http://127.0.0.1:18081/ >/dev/null; then break; fi
+            if curl -fsS http://127.0.0.1:18081/healthz >/dev/null; then break; fi
             sleep 0.25
           done
-          curl -fsS -u admin:testpass http://127.0.0.1:18081/ >/dev/null
+          curl -fsS http://127.0.0.1:18081/healthz | grep '"ok":true'
 
       - name: Test access protection
         run: |
@@ -88,7 +90,7 @@ jobs:
         run: |
           EXPECTED="$(git rev-parse --short=8 HEAD)"
           curl -fsS -u admin:testpass 'http://127.0.0.1:18081/api/version' > /tmp/version.json
-          grep '"version":"0.5.1"' /tmp/version.json
+          grep '"version":"0.5.2"' /tmp/version.json
           grep "\"shortCommit\":\"$EXPECTED\"" /tmp/version.json
 
       - name: Test connection registry
@@ -121,12 +123,23 @@ jobs:
             --data '{"schemaVersion":2,"apps":[],"connections":[]}' | grep '"saved":true'
           curl -fsS -u admin:testpass 'http://127.0.0.1:18081/api/workspace' | grep '"exists":true'
 
-      - name: Test Docker build fingerprint
+      - name: Test Docker image on native port 8081
         run: |
           EXPECTED="$(git rev-parse --short=8 HEAD)"
           docker build -t invarture-app-studio:ci .
           ACTUAL="$(docker run --rm --entrypoint node invarture-app-studio:ci -e 'process.stdout.write(require("./build-info.json").shortCommit || "")')"
           test "$ACTUAL" = "$EXPECTED"
+          docker run -d --name invarture-ci -p 18082:8081 invarture-app-studio:ci
+          for i in {1..30}; do
+            if curl -fsS http://127.0.0.1:18082/healthz >/tmp/docker-health.json; then break; fi
+            sleep 0.5
+          done
+          cat /tmp/docker-health.json
+          grep '"ok":true' /tmp/docker-health.json
+          curl -fsS http://127.0.0.1:18082/api/version >/tmp/docker-version.json
+          grep '"version":"0.5.2"' /tmp/docker-version.json
+          grep "\"shortCommit\":\"$EXPECTED\"" /tmp/docker-version.json
+          docker rm -f invarture-ci
 
       - name: Print diagnostics on failure
         if: failure()
@@ -135,5 +148,10 @@ jobs:
           cat /tmp/app-studio.log || true
           echo '--- version ---'
           cat /tmp/version.json || true
+          echo '--- docker health ---'
+          cat /tmp/docker-health.json || true
+          echo '--- docker version ---'
+          cat /tmp/docker-version.json || true
           echo '--- mock SAP ---'
           cat /tmp/mock-sap.log || true
+          docker logs invarture-ci || true
