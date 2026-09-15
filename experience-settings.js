@@ -63,6 +63,16 @@
     return app?.pages?.find(p => p.id === ws.currentPageId) || app?.pages?.[0] || null;
   }
 
+  function findComponentById(ws, id) {
+    for (const app of ws?.apps || []) {
+      for (const page of app.pages || []) {
+        const component = (page.components || []).find(c => c.id === id);
+        if (component) return component;
+      }
+    }
+    return null;
+  }
+
   function injectCss() {
     if (document.getElementById('ias-experience-css')) return;
     const style = document.createElement('style');
@@ -228,7 +238,7 @@
     const ws = workspace(); if (!ws) return alert('Workspace is unavailable.');
     const app = template.make(name.trim());
     ws.apps = Array.isArray(ws.apps) ? ws.apps : [];
-    ws.apps.push(app); ws.currentAppId = app.id; ws.currentPageId = app.pages[0]?.id || null; ws.selectedComponentId = null; ws.view = 'studio';
+    ws.apps.push(app); ws.currentAppId = app.id; ws.currentPageId = app.startPageId || app.pages[0]?.id || null; ws.selectedComponentId = null; ws.view = 'studio';
     saveWorkspace(ws);
   }
 
@@ -239,7 +249,8 @@
     const pageMap = new Map();
     copy.pages = (copy.pages || []).map(p => { const old=p.id; p.id=uid('page'); pageMap.set(old,p.id); p.components=(p.components||[]).map(c=>({ ...c, id:uid('cmp') })); return p; });
     for (const p of copy.pages) for (const c of p.components) if (c.logic?.action === 'navigate' && pageMap.has(c.logic.pageId)) c.logic.pageId = pageMap.get(c.logic.pageId);
-    ws.apps.push(copy); ws.currentAppId=copy.id; ws.currentPageId=copy.pages[0]?.id||null; ws.selectedComponentId=null; ws.view='studio'; saveWorkspace(ws);
+    if (copy.startPageId && pageMap.has(copy.startPageId)) copy.startPageId = pageMap.get(copy.startPageId);
+    ws.apps.push(copy); ws.currentAppId=copy.id; ws.currentPageId=copy.startPageId || copy.pages[0]?.id||null; ws.selectedComponentId=null; ws.view='studio'; saveWorkspace(ws);
   }
 
   function validateApp() {
@@ -295,7 +306,7 @@
   function go(view, appId) {
     const ws=workspace(); if(!ws) return;
     ws.view=view;
-    if(appId){ const app=ws.apps.find(a=>a.id===appId); if(app){ws.currentAppId=app.id;ws.currentPageId=app.pages?.[0]?.id||null;ws.selectedComponentId=null;} }
+    if(appId){ const app=ws.apps.find(a=>a.id===appId); if(app){ws.currentAppId=app.id;ws.currentPageId=(app.pages||[]).some(p=>p.id===app.startPageId)?app.startPageId:app.pages?.[0]?.id||null;ws.selectedComponentId=null;} }
     if(view==='studio' && !appId && prefs.defaultDevice) ws.device=prefs.defaultDevice;
     saveWorkspace(ws);
   }
@@ -317,9 +328,7 @@
 
   function runtimeWriteGuard(event) {
     const button = event.target.closest?.('[data-runtime-button]'); if (!button) return;
-    const ws=workspace(); const id=button.dataset.runtimeButton;
-    let component=null;
-    for(const app of ws?.apps||[]) for(const page of app.pages||[]){ component=(page.components||[]).find(c=>c.id===id); if(component) break; }
+    const state=workspace(); const component=findComponentById(state,button.dataset.runtimeButton);
     const action=component?.logic?.action;
     if(!['odata-create','odata-update','odata-delete'].includes(action)) return;
     if(prefs.demoReadOnly){ event.preventDefault(); event.stopImmediatePropagation(); alert('UI demo read-only mode is enabled. Disable it in Settings to test SAP write actions.'); return; }
