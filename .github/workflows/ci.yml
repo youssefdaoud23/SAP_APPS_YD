@@ -19,6 +19,9 @@ jobs:
         run: |
           node --check lib/platformModel.js
           node --check lib/buildInfo.js
+          node --check lib/securityModel.js
+          node --check lib/database.js
+          node --check lib/workspaceStore.js
           node --check history-preload.js
           node --check v05-preload.js
           node --check developer-tools.js
@@ -32,18 +35,23 @@ jobs:
           node --check experience-settings.js
           node --check app-advanced.js
           node --check v05-studio.js
+          node --check platform-admin-v06.js
           node --check server.js
           node --check api/sap.js
           node --check api/workspace.js
           node --check api/version.js
+          node --check api/platform.js
           node --check lib/sapConnector.js
           node --check lib/loadEnv.js
           node --check scripts/generate-build-info.js
           node --check sw.js
           node --check tests/mock-sap.js
           node --check tests/platform-model.test.js
+          node --check tests/security-model.test.js
           docker compose config >/tmp/compose-config.yml
           grep -q '8081' /tmp/compose-config.yml
+          grep -q 'postgres:17-alpine' /tmp/compose-config.yml
+          grep -q 'platform-admin-v06.js' index.html
           grep -q 'lib/platformModel.js' index.html
           grep -q 'v05-bootstrap.js' index.html
           grep -q 'runtime-data-v05.js' index.html
@@ -54,8 +62,8 @@ jobs:
           grep -q 'new MutationObserver(scheduleApply)' platform-version.js
           grep -q 'span.dataset.iasBuildMarker !== marker' platform-version.js
 
-      - name: V0.5 model tests
-        run: node tests/platform-model.test.js
+      - name: Model tests
+        run: npm test
 
       - name: Test generated build metadata
         run: |
@@ -65,7 +73,7 @@ jobs:
           node -e "const x=require('./build-info.json'); if(x.version!==process.argv[1]) process.exit(1); if(x.shortCommit!==process.argv[2]) { console.error(x.shortCommit, process.argv[2]); process.exit(1); }" "$EXPECTED_VERSION" "$EXPECTED_SHA"
           rm -f build-info.json
 
-      - name: Start mock SAP and App Studio
+      - name: Start mock SAP and file-mode App Studio
         env:
           SAP_ALLOW_HTTP: "true"
           SAP_CONNECTIONS_JSON: '[{"id":"mock","name":"Mock SAP","type":"OData V2","baseUrl":"http://127.0.0.1:18080/service/","auth":"basic","usernameEnv":"MOCK_USER","passwordEnv":"MOCK_PASS","sapClient":"100","sapLanguage":"EN"}]'
@@ -73,6 +81,7 @@ jobs:
           MOCK_PASS: secret
           APP_STUDIO_USER: admin
           APP_STUDIO_PASSWORD: testpass
+          WORKSPACE_STORAGE: file
           WORKSPACE_FILE: /tmp/invarture-workspace.json
           PORT: "18081"
         run: |
@@ -119,12 +128,12 @@ jobs:
             -H 'Content-Type: application/json' \
             --data '{"Name":"Created"}' | grep 'P300'
 
-      - name: Test persistent workspace API
+      - name: Test file workspace API
         run: |
           curl -fsS -u admin:testpass -X PUT 'http://127.0.0.1:18081/api/workspace' \
             -H 'Content-Type: application/json' \
             --data '{"schemaVersion":2,"apps":[],"connections":[]}' | grep '"saved":true'
-          curl -fsS -u admin:testpass 'http://127.0.0.1:18081/api/workspace' | grep '"exists":true'
+          curl -fsS -u admin:testpass 'http://127.0.0.1:18081/api/workspace' | grep '"storage":"file"'
 
       - name: Test Docker image on native port 8081
         run: |
@@ -138,11 +147,63 @@ jobs:
             if curl -fsS http://127.0.0.1:18082/healthz >/tmp/docker-health.json; then break; fi
             sleep 0.5
           done
-          cat /tmp/docker-health.json
           grep '"ok":true' /tmp/docker-health.json
           curl -fsS http://127.0.0.1:18082/api/version >/tmp/docker-version.json
           node -e "const x=require('/tmp/docker-version.json'); if(x.version!==process.argv[1] || x.shortCommit!==process.argv[2]) { console.error(x); process.exit(1); }" "$EXPECTED_VERSION" "$EXPECTED_SHA"
           docker rm -f invarture-ci
+
+      - name: Test PostgreSQL workspace, revision conflicts and audit
+        run: |
+          docker network create invarture-ci-net
+          docker run -d --name invarture-ci-db --network invarture-ci-net \
+            -e POSTGRES_DB=invarture \
+            -e POSTGRES_USER=invarture \
+            -e POSTGRES_PASSWORD=ci_test_password \
+            postgres:17-alpine
+          for i in {1..40}; do
+            if docker exec invarture-ci-db pg_isready -U invarture -d invarture >/dev/null 2>&1; then break; fi
+            sleep 0.5
+          done
+          docker exec invarture-ci-db pg_isready -U invarture -d invarture
+
+          docker run -d --name invarture-ci-pg --network invarture-ci-net -p 18083:8081 \
+            -e WORKSPACE_STORAGE=postgres \
+            -e DATABASE_URL=postgresql://invarture:ci_test_password@invarture-ci-db:5432/invarture \
+            invarture-app-studio:ci
+          for i in {1..40}; do
+            if curl -fsS http://127.0.0.1:18083/healthz >/dev/null; then break; fi
+            sleep 0.5
+          done
+
+          curl -fsS http://127.0.0.1:18083/api/platform > /tmp/platform.json
+          grep '"mode":"postgres"' /tmp/platform.json
+          grep '"connected":true' /tmp/platform.json
+
+          curl -fsS -D /tmp/workspace-headers-1.txt -X PUT 'http://127.0.0.1:18083/api/workspace' \
+            -H 'Content-Type: application/json' \
+            --data '{"schemaVersion":2,"apps":[],"connections":[]}' > /tmp/workspace-1.json
+          grep '"revision":1' /tmp/workspace-1.json
+          ETAG="$(awk 'BEGIN{IGNORECASE=1} /^etag:/ {gsub("\r","",$2); print $2}' /tmp/workspace-headers-1.txt)"
+          test -n "$ETAG"
+
+          curl -fsS -D /tmp/workspace-headers-2.txt -X PUT 'http://127.0.0.1:18083/api/workspace' \
+            -H 'Content-Type: application/json' \
+            -H "If-Match: $ETAG" \
+            --data '{"schemaVersion":3,"apps":[],"connections":[]}' > /tmp/workspace-2.json
+          grep '"revision":2' /tmp/workspace-2.json
+
+          CODE="$(curl -s -o /tmp/workspace-conflict.json -w '%{http_code}' -X PUT 'http://127.0.0.1:18083/api/workspace' \
+            -H 'Content-Type: application/json' \
+            -H "If-Match: $ETAG" \
+            --data '{"schemaVersion":4,"apps":[],"connections":[]}')"
+          test "$CODE" = "409"
+          grep 'Workspace changed on the server' /tmp/workspace-conflict.json
+
+          test "$(docker exec invarture-ci-db psql -U invarture -d invarture -tAc 'SELECT COUNT(*) FROM platform_roles')" -ge 4
+          test "$(docker exec invarture-ci-db psql -U invarture -d invarture -tAc "SELECT COUNT(*) FROM platform_audit_events WHERE event_type='workspace.updated'")" -ge 2
+
+          docker rm -f invarture-ci-pg invarture-ci-db
+          docker network rm invarture-ci-net
 
       - name: Print diagnostics on failure
         if: failure()
@@ -155,6 +216,11 @@ jobs:
           cat /tmp/docker-health.json || true
           echo '--- docker version ---'
           cat /tmp/docker-version.json || true
+          echo '--- platform ---'
+          cat /tmp/platform.json || true
+          echo '--- workspace conflict ---'
+          cat /tmp/workspace-conflict.json || true
           echo '--- mock SAP ---'
           cat /tmp/mock-sap.log || true
-          docker logs invarture-ci || true
+          docker logs invarture-ci-pg || true
+          docker logs invarture-ci-db || true
