@@ -1,0 +1,23 @@
+[Unit]
+Description=Invarture App Studio
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/invarture-app-studio
+ExecStart=/usr/bin/node /opt/invarture-app-studio/server.js
+Environment=NODE_ENV=production
+Environment=PORT=8080
+Restart=on-failure
+RestartSec=3
+User=www-data
+Group=www-data
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/invarture-app-studio
+
+[Install]
+WantedBy=multi-user.target
