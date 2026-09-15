@@ -4,9 +4,50 @@ Invarture App Studio is a clean-room, Invarture-branded SAP-focused low-code app
 
 The project does not copy Neptune proprietary code, schemas or internal implementation.
 
-## Current test build - v0.5.0
+## Current test build - v0.5.1
 
 V0.5 is the first architecture-focused milestone. It preserves the working secure SAP connector and dependency-light Ubuntu/Docker deployment while introducing a shared application model and a more capable Studio.
+
+### V0.5.1 build verification
+
+The running application now shows the exact deployed build in both the sidebar and top bar:
+
+```text
+v0.5.1 · 1234abcd
+```
+
+The first value is the product version. The second is the short Git commit SHA stamped into the running Docker image.
+
+Click the build badge to see the full Git commit, build timestamp, runtime environment and Node.js version.
+
+After an update:
+
+```bash
+git pull && docker compose up -d --build
+```
+
+verify the host checkout with:
+
+```bash
+git rev-parse --short=8 HEAD
+```
+
+That value should match the commit displayed by App Studio.
+
+The server also exposes:
+
+```text
+GET /api/version
+```
+
+and sends these headers on responses:
+
+```text
+X-Invarture-Version
+X-Invarture-Commit
+```
+
+See `docs/VERSIONING.md` for the full verification procedure.
 
 ### V0.5 highlights
 
@@ -79,6 +120,8 @@ See `docs/V0.5.md` and `docs/ARCHITECTURE.md` for the milestone and architectura
 - Nginx reverse-proxy template
 - Vercel-compatible SAP API handler
 - GitHub Actions integration and mock SAP tests
+- Runtime version and Git fingerprint endpoint
+- Docker build commit stamping
 
 ## Quick Ubuntu / Docker update
 
@@ -208,6 +251,9 @@ GitHub Actions additionally verifies:
 
 - JavaScript syntax and V0.5 load order
 - V0.5 application-model behavior
+- build metadata generation
+- runtime version endpoint against the checked-out Git SHA
+- Docker image fingerprint against the checked-out Git SHA
 - server startup
 - Studio access protection
 - Basic Auth forwarding to mock SAP
@@ -223,6 +269,7 @@ GitHub Actions additionally verifies:
 - `docs/ARCHITECTURE.md` - current architecture and migration boundary
 - `docs/APPLICATION_SCHEMA.md` - application model and V0.5 extensions
 - `docs/CONNECTIONS.md` - connection/authentication configuration
+- `docs/VERSIONING.md` - version and deployed Git commit verification
 
 ## Roadmap
 
