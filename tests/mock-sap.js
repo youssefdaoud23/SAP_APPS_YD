@@ -29,6 +29,10 @@ const server = http.createServer((req, res) => {
   }
 
   const url = new URL(req.url, `http://127.0.0.1:${PORT}`);
+  if (url.pathname.startsWith('/service/') && (url.searchParams.get('sap-client') !== '100' || url.searchParams.get('sap-language') !== 'EN')) {
+    res.statusCode = 400;
+    return res.end('Missing SAP client/language defaults');
+  }
   if (url.pathname === '/service/' && req.headers['x-csrf-token'] === 'Fetch') {
     res.setHeader('x-csrf-token', 'mock-csrf-token');
     res.setHeader('Set-Cookie', 'SAP_SESSION=mock; Path=/');
