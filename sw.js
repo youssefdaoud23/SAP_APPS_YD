@@ -1,4 +1,4 @@
-const CACHE = 'invarture-app-studio-v14';
+const CACHE = 'invarture-app-studio-v15';
 const ASSETS = [
   './',
   './index.html',
@@ -17,6 +17,7 @@ const ASSETS = [
   './experience-settings.js',
   './app-advanced.js',
   './v05-studio.js',
+  './platform-admin-v06.js',
   './manifest.webmanifest'
 ];
 self.addEventListener('install', event => event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(ASSETS)).then(() => self.skipWaiting())));
