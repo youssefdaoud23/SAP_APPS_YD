@@ -3,8 +3,11 @@
 const { Readable } = require('stream');
 const database = require('../lib/database');
 const sapConnector = require('../lib/sapConnector');
+const dataMapping = require('../lib/dataMapping');
 const { hasPermission } = require('../lib/securityModel');
 const { authorizeConnectionRequest } = require('../lib/connectionPolicy');
+
+const MAX_MAPPED_RESPONSE_BYTES = 5 * 1024 * 1024;
 
 function send(res, status, body) {
   res.statusCode = status;
@@ -67,11 +70,21 @@ async function readBody(req, maxBytes = 2 * 1024 * 1024) {
   return Buffer.concat(chunks);
 }
 
+function bodyValue(buffer, contentType = '') {
+  if (!buffer || !buffer.length) return null;
+  const text = buffer.toString('utf8');
+  if (String(contentType).toLowerCase().includes('json')) {
+    try { return JSON.parse(text); } catch { return text; }
+  }
+  try { return JSON.parse(text); } catch { return text; }
+}
+
 async function findRuntimeOperation(slug, method, runtimePath) {
   const result = await database.getPool().query(`
     SELECT a.api_id AS "apiId", a.name AS "apiName", a.slug, a.status,
            o.operation_id AS "operationId", o.method, o.path, o.mode,
            o.connection_id AS "connectionId", o.upstream_path AS "upstreamPath",
+           o.request_mapping AS "requestMapping", o.response_mapping AS "responseMapping",
            o.headers, o.timeout_ms AS "timeoutMs", o.enabled
     FROM platform_api_definitions a
     JOIN platform_api_operations o ON o.api_id=a.api_id
@@ -83,6 +96,23 @@ async function findRuntimeOperation(slug, method, runtimePath) {
     if (params) return { ...row, params };
   }
   return null;
+}
+
+async function sendMappedResponse(res, response, mapping) {
+  const length = Number(response.headers.get('content-length') || 0);
+  if (length > MAX_MAPPED_RESPONSE_BYTES) throw Object.assign(new Error('Upstream response is too large for response mapping.'), { statusCode: 502 });
+  const bytes = Buffer.from(await response.arrayBuffer());
+  if (bytes.length > MAX_MAPPED_RESPONSE_BYTES) throw Object.assign(new Error('Upstream response is too large for response mapping.'), { statusCode: 502 });
+  let value;
+  try { value = bytes.length ? JSON.parse(bytes.toString('utf8')) : null; }
+  catch { throw Object.assign(new Error('Response mapping requires a JSON upstream response.'), { statusCode: 502 }); }
+  const mapped = dataMapping.mapResponse(mapping, value);
+  res.statusCode = response.status;
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-store');
+  const etag = response.headers.get('etag');
+  if (etag) res.setHeader('ETag', etag);
+  return res.end(JSON.stringify(mapped));
 }
 
 module.exports = async function apiRuntimeHandler(req, res) {
@@ -110,13 +140,33 @@ module.exports = async function apiRuntimeHandler(req, res) {
     let upstreamPath = applyParams(operation.upstreamPath, operation.params).replace(/^\/+/, '');
     const incomingQuery = url.searchParams.toString();
     if (incomingQuery) upstreamPath += `${upstreamPath.includes('?') ? '&' : '?'}${incomingQuery}`;
-    const body = await readBody(req);
+
+    const originalBody = await readBody(req);
+    const mappingContext = {
+      body: bodyValue(originalBody, req.headers['content-type']),
+      query: Object.fromEntries(url.searchParams.entries()),
+      params: operation.params,
+      principal: { username: req.principal.username, roles: req.principal.roles || [] }
+    };
+    const mappedRequest = dataMapping.mapRequest(operation.requestMapping, mappingContext, originalBody);
+    const headers = safeHeaders(operation.headers, req.headers);
+    if (mappedRequest.contentType) headers['Content-Type'] = mappedRequest.contentType;
+
     const response = await sapConnector.requestConnection(operation.connectionId, upstreamPath, {
       method,
-      headers: safeHeaders(operation.headers, req.headers),
-      body,
+      headers,
+      body: mappedRequest.body,
       timeoutMs: operation.timeoutMs
     });
+
+    if (!dataMapping.isEmptyMapping(operation.responseMapping)) {
+      if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
+        database.audit('api.runtime.write', req.principal.username, 'api-operation', operation.operationId, {
+          apiId: operation.apiId, slug, method, path: runtimePath, connectionId: operation.connectionId, status: response.status, mapped: true
+        }).catch(() => {});
+      }
+      return sendMappedResponse(res, response, operation.responseMapping);
+    }
 
     res.statusCode = response.status;
     const contentType = response.headers.get('content-type');
@@ -131,7 +181,8 @@ module.exports = async function apiRuntimeHandler(req, res) {
         method,
         path: runtimePath,
         connectionId: operation.connectionId,
-        status: response.status
+        status: response.status,
+        mapped: false
       }).catch(() => {});
     }
     if (!response.body) return res.end();
