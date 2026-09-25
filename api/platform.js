@@ -4,6 +4,7 @@ const workspaceStore = require('../lib/workspaceStore');
 const database = require('../lib/database');
 const auth = require('../lib/auth');
 const oidc = require('../lib/oidc');
+const releaseGovernance = require('../lib/releaseGovernance');
 const { PERMISSIONS, ROLES } = require('../lib/securityModel');
 const { getBuildInfo } = require('../lib/buildInfo');
 
@@ -42,6 +43,10 @@ module.exports = async function platformHandler(req, res) {
         roles: ROLES.map(role => ({ key: role.key, name: role.name, description: role.description, permissions: role.permissions })),
         permissions: PERMISSIONS
       },
+      governance: {
+        protectedReleaseApprovals: releaseGovernance.enabled(),
+        selfApprovalAllowed: releaseGovernance.selfApprovalAllowed()
+      },
       capabilities: {
         optimisticLocking: true,
         workspaceRevisions: storage.mode === 'postgres',
@@ -62,7 +67,10 @@ module.exports = async function platformHandler(req, res) {
         roleAwareLaunchpad: true,
         enterpriseComponentCatalog: true,
         rfcBapiBridge: Boolean(String(process.env.SAP_RFC_CONNECTIONS_JSON || '').trim() && String(process.env.SAP_RFC_CONNECTIONS_JSON || '').trim() !== '[]'),
-        rfcAdapter: 'optional-http-json-bridge'
+        rfcAdapter: 'optional-http-json-bridge',
+        releaseApprovals: db.connected === true,
+        releaseComparison: db.connected === true,
+        backupRestoreScripts: true
       }
     });
   } catch (error) {
