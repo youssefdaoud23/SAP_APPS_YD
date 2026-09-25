@@ -1,32 +1,56 @@
 # Authorization model
 
-Invarture App Studio V0.6 introduces a persistent role-based authorization model while keeping the existing Basic/local authentication entry point for compatibility.
+Invarture App Studio V0.8 separates authentication from authorization and enforces platform permissions on the server.
 
-## Separation of authentication and authorization
+## Authentication versus authorization
 
 Authentication answers: who is the caller?
 
 Authorization answers: what may that caller do?
 
-V0.6 intentionally separates the two so Microsoft Entra ID, generic OIDC or another identity provider can later replace Basic authentication without changing application permissions.
+The separation allows local development, HTTP Basic and OIDC identities to resolve into the same persistent role/permission model.
 
-## Current authentication modes
+## Authentication modes
 
-### Basic
-
-When `APP_STUDIO_USER` and `APP_STUDIO_PASSWORD` are configured, the Node server protects the complete application with HTTP Basic authentication.
-
-The authenticated Basic identity is temporarily mapped to the built-in `platform-admin` role.
+Select the mode with `AUTH_MODE`.
 
 ### Local development
 
-When Basic protection is disabled, the runtime uses the transitional identity `local-development` with the `platform-admin` role.
+`AUTH_MODE=local`
 
-This is intended for local development only and must not be treated as a production security boundary.
+The runtime uses the transitional `local-development` identity with the built-in `platform-admin` role. This mode is intended only for trusted local development.
+
+### HTTP Basic
+
+`AUTH_MODE=basic`
+
+Configure `APP_STUDIO_USER` and `APP_STUDIO_PASSWORD`. The Basic identity is currently mapped to `platform-admin` for compatibility.
+
+### OIDC
+
+`AUTH_MODE=oidc`
+
+V0.8 implements generic OpenID Connect using Authorization Code + PKCE.
+
+The server performs:
+
+1. OIDC discovery,
+2. state, nonce and PKCE generation,
+3. authorization-code exchange,
+4. JWKS signing-key lookup,
+5. ID-token signature validation,
+6. issuer, audience and time-claim validation,
+7. persistent platform identity resolution,
+8. PostgreSQL session creation,
+9. role and permission resolution on the authenticated principal.
+
+The browser receives an opaque random session token. PostgreSQL stores only the SHA-256 hash of that token. Login-transaction state is stored in a short-lived encrypted HttpOnly cookie.
+
+The implementation is suitable for Microsoft Entra ID configuration, but V0.8 automated validation uses a standards-compatible mock OIDC provider. Real-tenant Entra certification and Microsoft Graph group-overage expansion remain future work.
 
 ## Built-in permissions
 
-Current permission keys:
+Current permission keys are:
 
 - `platform.admin`
 - `apps.view`
@@ -38,11 +62,12 @@ Current permission keys:
 - `connections.manage`
 - `workflows.manage`
 - `api.manage`
+- `functions.manage`
 - `users.manage`
 - `audit.view`
 - `production.write`
 
-`platform.admin` grants full platform access.
+`platform.admin` grants all current permissions.
 
 ## Built-in roles
 
@@ -52,61 +77,113 @@ Receives every current permission.
 
 ### Developer
 
-Focused on application design and testing:
+Focused on application, API and Server Functions development:
 
-- apps.view
-- apps.create
-- apps.edit
-- connections.view
-- audit.view
+- `apps.view`
+- `apps.create`
+- `apps.edit`
+- `connections.view`
+- `api.manage`
+- `functions.manage`
+- `audit.view`
 
 ### Publisher
 
-Focused on controlled release and promotion:
+Focused on release and promotion:
 
-- apps.view
-- apps.publish
-- apps.deploy
-- connections.view
-- audit.view
+- `apps.view`
+- `apps.publish`
+- `apps.deploy`
+- `connections.view`
+- `audit.view`
 
 ### Viewer
 
 Read-only platform access:
 
-- apps.view
-- connections.view
+- `apps.view`
+- `connections.view`
 
 ## Persistent identity mappings
 
-PostgreSQL contains persistent user and group records.
+PostgreSQL stores platform users, groups, group memberships, user roles and group roles.
 
-A user record is an authorization mapping with fields such as username, display name, email, identity provider and external subject identifier.
+OIDC identities are resolved using issuer/subject identity information and can be matched to persistent external group identifiers. User and group roles are combined to build effective permissions.
 
-A group may be associated with roles and members. The external group identifier field is reserved for future identity-provider group mapping.
+Optional OIDC auto-provisioning can create a platform user mapping with a configured default role. Bootstrap administrator identities can be configured separately for initial setup.
 
-No passwords are stored in these V0.6 user records.
+Disabled platform users are denied access during identity resolution.
+
+## Persistent sessions
+
+OIDC sessions are stored in `platform_auth_sessions` with:
+
+- a SHA-256 session-token hash,
+- platform user and username,
+- resolved principal JSON,
+- provider and subject,
+- creation/last-seen/expiration timestamps,
+- optional revocation timestamp.
+
+Logout revokes the database session and expires the browser cookie.
 
 ## Server-side enforcement
 
-V0.6 begins server-side permission enforcement with shared workspace writes and security administration.
+Frontend visibility is never an authorization boundary.
 
-Frontend visibility is never considered an authorization boundary.
+V0.8 enforces permissions server-side for key platform surfaces.
 
-Further endpoints will progressively require explicit permissions, including connection management, publishing, deployment and production SAP mutations.
+### Shared workspace
 
-## Future OIDC / Entra flow
+- read: `apps.view`
+- write: `apps.edit`
 
-The intended direction is:
+### Identity administration
 
-1. authenticate through OIDC / Microsoft Entra ID
-2. validate the identity-provider token server-side
-3. resolve the external subject to a platform user mapping
-4. resolve external and platform group membership
-5. combine user and group roles
-6. derive effective permissions
-7. attach the resolved principal to the request
-8. enforce permissions server-side
-9. record important administrative actions in the audit log
+- users/groups/roles administration: `users.manage`
 
-OIDC is not implemented yet in V0.6.
+### Audit
+
+- audit access: `audit.view`
+
+### API Designer
+
+- create/update/delete APIs and operations: `api.manage`
+
+### Server Functions
+
+- create/update/delete function definitions: `functions.manage`
+- published runtime invocation requires normal authenticated application access and any permissions needed by downstream SAP steps
+
+### SAP connections
+
+A central connection policy applies to both direct SAP requests and platform runtime features:
+
+- any SAP access: `connections.view`
+- read operations: `apps.view`
+- write operations: `apps.edit`
+- writes to a connection explicitly marked production: `production.write`
+
+A connection is treated as production when configured with `production: true` or a stage/environment such as `PRD`, `prod` or `production`.
+
+## Audit behavior
+
+Security-sensitive and platform-governance actions write audit events where applicable, including:
+
+- OIDC login,
+- session revocation,
+- user/group changes,
+- API definition changes,
+- Server Function changes and execution,
+- deployment/promotion/rollback,
+- runtime API writes.
+
+## Remaining authorization work
+
+The authorization model is operational, but additional hardening remains for later releases, including:
+
+- real Microsoft Entra tenant validation,
+- Microsoft Graph expansion for group-overage claims,
+- finer-grained per-application/per-API permissions,
+- protected-environment approval policies,
+- explicit permission policies for future Workflow, Launchpad and RFC/BAPI capabilities.
