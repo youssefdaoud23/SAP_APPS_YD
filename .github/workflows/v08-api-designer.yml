@@ -1,0 +1,153 @@
+name: V0.8 API Designer
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  api-designer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Validate API Designer modules
+        run: |
+          node --check api/apis.js
+          node --check api/apiRuntime.js
+          node --check api-designer-v08.js
+          node --check lib/sapConnector.js
+          node --check tests/mock-sap.js
+          node --check server.js
+          grep -q 'api-designer-v08.js' index.html
+          grep -q 'api-designer-v08.js' sw.js
+          grep -q '/runtime/api/' sw.js
+
+      - name: Build application image
+        run: docker build -t invarture-app-studio:api-ci .
+
+      - name: Start PostgreSQL SAP mock and App Studio
+        run: |
+          docker network create invarture-api-net
+          docker run -d --name invarture-api-db --network invarture-api-net \
+            -e POSTGRES_DB=invarture \
+            -e POSTGRES_USER=invarture \
+            -e POSTGRES_PASSWORD=api_test_password \
+            postgres:17-alpine
+
+          READY=0
+          for i in {1..60}; do
+            if docker exec invarture-api-db psql -U invarture -d invarture -tAc 'SELECT 1' 2>/dev/null | grep -qx '1'; then
+              sleep 1
+              if docker exec invarture-api-db psql -U invarture -d invarture -tAc 'SELECT 1' 2>/dev/null | grep -qx '1'; then READY=1; break; fi
+            fi
+            sleep 0.5
+          done
+          test "$READY" = "1"
+
+          docker run -d --name invarture-api-sap --network invarture-api-net --network-alias mock-sap \
+            -e MOCK_SAP_HOST=0.0.0.0 \
+            -e MOCK_SAP_PORT=18080 \
+            --entrypoint node invarture-app-studio:api-ci tests/mock-sap.js
+
+          docker run -d --name invarture-api-app --network invarture-api-net -p 18086:8081 \
+            -e PORT=8081 \
+            -e DATABASE_URL=postgresql://invarture:api_test_password@invarture-api-db:5432/invarture \
+            -e WORKSPACE_STORAGE=postgres \
+            -e AUTH_MODE=local \
+            -e SAP_ALLOW_HTTP=true \
+            -e MOCK_USER=test \
+            -e MOCK_PASS=secret \
+            -e 'SAP_CONNECTIONS_JSON=[{"id":"mock","name":"Mock SAP","type":"OData V2","baseUrl":"http://mock-sap:18080/service/","auth":"basic","usernameEnv":"MOCK_USER","passwordEnv":"MOCK_PASS","sapClient":"100","sapLanguage":"EN"}]' \
+            invarture-app-studio:api-ci
+
+          APP_READY=0
+          for i in {1..60}; do
+            if curl -fsS http://127.0.0.1:18086/healthz >/tmp/api-health.json; then APP_READY=1; break; fi
+            sleep 0.5
+          done
+          test "$APP_READY" = "1"
+
+      - name: Create API definition and verify optimistic locking
+        run: |
+          curl -fsS -X POST http://127.0.0.1:18086/api/apis \
+            -H 'Content-Type: application/json' \
+            --data '{"name":"Product Catalog API","slug":"product-catalog","description":"CI reusable API"}' > /tmp/api-created.json
+          API_ID="$(node -p "require('/tmp/api-created.json').id")"
+          test -n "$API_ID"
+          echo "$API_ID" > /tmp/api-id
+          grep '"revision":1' /tmp/api-created.json
+
+          CODE="$(curl -s -o /tmp/api-conflict.json -w '%{http_code}' -X PUT "http://127.0.0.1:18086/api/apis?id=$API_ID" \
+            -H 'Content-Type: application/json' -H 'If-Match: W/"api-999"' \
+            --data '{"name":"Stale edit"}')"
+          test "$CODE" = "409"
+          grep 'changed on the server' /tmp/api-conflict.json
+
+      - name: Add GET operation and publish API
+        run: |
+          API_ID="$(cat /tmp/api-id)"
+          curl -fsS -X POST "http://127.0.0.1:18086/api/apis?action=operation&apiId=$API_ID" \
+            -H 'Content-Type: application/json' \
+            --data '{"method":"GET","path":"/products","summary":"List products","connectionId":"mock","upstreamPath":"Products","mode":"sap-proxy"}' > /tmp/api-with-get.json
+          grep '"method":"GET"' /tmp/api-with-get.json
+          grep '"revision":2' /tmp/api-with-get.json
+
+          CODE="$(curl -s -o /tmp/runtime-draft.json -w '%{http_code}' http://127.0.0.1:18086/runtime/api/product-catalog/products)"
+          test "$CODE" = "404"
+
+          curl -fsS -D /tmp/api-detail-headers.txt "http://127.0.0.1:18086/api/apis?id=$API_ID" > /tmp/api-detail.json
+          ETAG="$(awk 'BEGIN{IGNORECASE=1} /^etag:/ {gsub("\r","",$2); print $2}' /tmp/api-detail-headers.txt)"
+          test -n "$ETAG"
+          curl -fsS -X PUT "http://127.0.0.1:18086/api/apis?id=$API_ID" \
+            -H 'Content-Type: application/json' -H "If-Match: $ETAG" \
+            --data '{"status":"published"}' > /tmp/api-published.json
+          grep '"status":"published"' /tmp/api-published.json
+
+      - name: Execute published GET and POST operations
+        run: |
+          curl -fsS 'http://127.0.0.1:18086/runtime/api/product-catalog/products?$top=1' > /tmp/runtime-get.json
+          grep 'Demo Product' /tmp/runtime-get.json
+
+          API_ID="$(cat /tmp/api-id)"
+          curl -fsS -X POST "http://127.0.0.1:18086/api/apis?action=operation&apiId=$API_ID" \
+            -H 'Content-Type: application/json' \
+            --data '{"method":"POST","path":"/products","summary":"Create product","connectionId":"mock","upstreamPath":"Products","mode":"sap-proxy"}' > /tmp/api-with-post.json
+          grep '"method":"POST"' /tmp/api-with-post.json
+
+          curl -fsS -X POST http://127.0.0.1:18086/runtime/api/product-catalog/products \
+            -H 'Content-Type: application/json' --data '{"Name":"Created"}' > /tmp/runtime-post.json
+          grep 'P300' /tmp/runtime-post.json
+
+      - name: Verify persistence and audit trail
+        run: |
+          test "$(docker exec invarture-api-db psql -U invarture -d invarture -tAc 'SELECT COUNT(*) FROM platform_api_definitions')" -eq 1
+          test "$(docker exec invarture-api-db psql -U invarture -d invarture -tAc 'SELECT COUNT(*) FROM platform_api_operations')" -eq 2
+          test "$(docker exec invarture-api-db psql -U invarture -d invarture -tAc "SELECT COUNT(*) FROM platform_audit_events WHERE event_type='api.created'")" -ge 1
+          test "$(docker exec invarture-api-db psql -U invarture -d invarture -tAc "SELECT COUNT(*) FROM platform_audit_events WHERE event_type='api.runtime.write'")" -ge 1
+
+      - name: Print diagnostics on failure
+        if: failure()
+        run: |
+          echo '--- App Studio ---'
+          docker logs invarture-api-app || true
+          echo '--- Mock SAP ---'
+          docker logs invarture-api-sap || true
+          echo '--- API created ---'
+          cat /tmp/api-created.json || true
+          echo '--- API conflict ---'
+          cat /tmp/api-conflict.json || true
+          echo '--- Runtime GET ---'
+          cat /tmp/runtime-get.json || true
+          echo '--- Runtime POST ---'
+          cat /tmp/runtime-post.json || true
+
+      - name: Cleanup
+        if: always()
+        run: |
+          docker rm -f invarture-api-app invarture-api-sap invarture-api-db || true
+          docker network rm invarture-api-net || true
