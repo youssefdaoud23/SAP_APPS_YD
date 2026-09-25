@@ -4,6 +4,7 @@ const http = require('http');
 const crypto = require('crypto');
 
 const PORT = Number(process.env.MOCK_OIDC_PORT || 18084);
+const HOST = process.env.MOCK_OIDC_HOST || '127.0.0.1';
 const ISSUER = process.env.MOCK_OIDC_ISSUER || `http://127.0.0.1:${PORT}`;
 const { privateKey, publicKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
 const publicJwk = publicKey.export({ format: 'jwk' });
@@ -106,4 +107,4 @@ const server = http.createServer(async (req, res) => {
   return json(res, 404, { error: 'not_found' });
 });
 
-server.listen(PORT, '127.0.0.1', () => console.log(`Mock OIDC provider listening on ${ISSUER}`));
+server.listen(PORT, HOST, () => console.log(`Mock OIDC provider listening on ${HOST}:${PORT} as issuer ${ISSUER}`));
