@@ -15,6 +15,7 @@ const securityApi = require('./api/security');
 const auditApi = require('./api/audit');
 const deploymentGateway = require('./api/deploymentGateway');
 const releaseApprovalsApi = require('./api/releaseApprovals');
+const releasesApi = require('./api/releases');
 const apisApi = require('./api/apis');
 const openApi = require('./api/openapi');
 const apiRuntime = require('./api/apiRuntime');
@@ -101,6 +102,7 @@ const server = http.createServer(async (req, res) => {
     if (req.url.startsWith('/api/security')) return securityApi(req, res);
     if (req.url.startsWith('/api/audit')) return auditApi(req, res);
     if (req.url.startsWith('/api/release-approvals')) return releaseApprovalsApi(req, res);
+    if (req.url.startsWith('/api/releases')) return releasesApi(req, res);
     if (req.url.startsWith('/api/deployments')) return deploymentGateway(req, res);
     if (req.url.startsWith('/api/openapi')) return openApi(req, res);
     if (req.url.startsWith('/api/apis')) return apisApi(req, res);
