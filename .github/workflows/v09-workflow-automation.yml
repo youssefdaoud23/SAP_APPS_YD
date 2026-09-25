@@ -1,0 +1,111 @@
+name: V0.9 Workflow Automation
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  workflow-automation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Build image
+        run: docker build -t invarture-app-studio:workflow-automation-ci .
+
+      - name: Start PostgreSQL and App Studio
+        run: |
+          docker network create invarture-workflow-auto
+          docker run -d --name invarture-workflow-auto-db --network invarture-workflow-auto \
+            -e POSTGRES_DB=invarture -e POSTGRES_USER=invarture -e POSTGRES_PASSWORD=workflow_test_password \
+            postgres:17-alpine
+          READY=0
+          for i in {1..60}; do
+            if docker exec invarture-workflow-auto-db psql -U invarture -d invarture -tAc 'SELECT 1' 2>/dev/null | grep -qx '1'; then READY=1; break; fi
+            sleep .5
+          done
+          test "$READY" = "1"
+          docker run -d --name invarture-workflow-auto-app --network invarture-workflow-auto -p 18092:8081 \
+            -e PORT=8081 \
+            -e DATABASE_URL=postgresql://invarture:workflow_test_password@invarture-workflow-auto-db:5432/invarture \
+            -e WORKSPACE_STORAGE=postgres -e AUTH_MODE=local \
+            invarture-app-studio:workflow-automation-ci
+          APP_READY=0
+          for i in {1..60}; do
+            if curl -fsS http://127.0.0.1:18092/healthz >/dev/null; then APP_READY=1; break; fi
+            sleep .5
+          done
+          test "$APP_READY" = "1"
+
+      - name: Create and publish declarative Server Function
+        run: |
+          cat >/tmp/wf-function.json <<'JSON'
+          {
+            "name":"Finalize Purchase Order",
+            "slug":"finalize-po",
+            "inputSchema":{"required":["po","status"]},
+            "steps":[
+              {"type":"set","key":"message","value":"PO {{input.po}} is {{input.status}}"},
+              {"type":"respond","value":{"po":"{{input.po}}","status":"{{input.status}}","message":"{{vars.message}}","executedBy":"{{principal.username}}"}}
+            ]
+          }
+          JSON
+          curl -fsS -X POST http://127.0.0.1:18092/api/functions -H 'Content-Type: application/json' --data-binary @/tmp/wf-function.json >/tmp/wf-function-created.json
+          FN_ID="$(node -p "require('/tmp/wf-function-created.json').id")"
+          curl -fsS -D /tmp/wf-function-headers.txt "http://127.0.0.1:18092/api/functions?id=$FN_ID" >/dev/null
+          ETAG="$(awk 'BEGIN{IGNORECASE=1} /^etag:/ {gsub("\r","",$2); print $2}' /tmp/wf-function-headers.txt)"
+          curl -fsS -X PUT "http://127.0.0.1:18092/api/functions?id=$FN_ID" -H 'Content-Type: application/json' -H "If-Match: $ETAG" --data '{"status":"published"}' >/tmp/wf-function-published.json
+          grep '"status":"published"' /tmp/wf-function-published.json
+
+      - name: Create workflow with human approval and Server Function automation
+        run: |
+          cat >/tmp/wf-automation.json <<'JSON'
+          {
+            "name":"Governed PO Automation",
+            "slug":"governed-po-automation",
+            "steps":[
+              {"id":"start","type":"start","next":"review"},
+              {"id":"review","type":"approval","title":"Approve PO {{input.po}}","assignedRole":"platform-admin","approveNext":"finalize","rejectNext":"rejected"},
+              {"id":"finalize","type":"server-function","functionSlug":"finalize-po","input":{"po":"{{input.po}}","status":"Approved"},"resultKey":"finalization","next":"approved"},
+              {"id":"approved","type":"end","result":{"po":"{{data.finalization.po}}","status":"{{data.finalization.status}}","message":"{{data.finalization.message}}","executedBy":"{{data.finalization.executedBy}}"}},
+              {"id":"rejected","type":"end","result":{"po":"{{input.po}}","status":"Rejected"}}
+            ]
+          }
+          JSON
+          curl -fsS -X POST http://127.0.0.1:18092/api/workflows -H 'Content-Type: application/json' --data-binary @/tmp/wf-automation.json >/tmp/wf-auto-created.json
+          WF_ID="$(node -p "require('/tmp/wf-auto-created.json').id")"
+          curl -fsS -X PUT "http://127.0.0.1:18092/api/workflows?id=$WF_ID" -H 'Content-Type: application/json' -H 'If-Match: W/"workflow-1"' --data '{"status":"published"}' >/tmp/wf-auto-published.json
+          grep '"status":"published"' /tmp/wf-auto-published.json
+
+      - name: Approve task and verify automation continues to completion
+        run: |
+          curl -fsS -X POST http://127.0.0.1:18092/runtime/workflows/governed-po-automation/start -H 'Content-Type: application/json' --data '{"po":"450001"}' >/tmp/wf-auto-start.json
+          grep '"status":"waiting"' /tmp/wf-auto-start.json
+          TASK_ID="$(node -p "require('/tmp/wf-auto-start.json').task.id")"
+          curl -fsS -X POST "http://127.0.0.1:18092/runtime/tasks/$TASK_ID/complete" -H 'Content-Type: application/json' --data '{"resolution":"approve"}' >/tmp/wf-auto-complete.json
+          grep '"status":"completed"' /tmp/wf-auto-complete.json
+          grep '"status":"Approved"' /tmp/wf-auto-complete.json
+          grep 'PO 450001 is Approved' /tmp/wf-auto-complete.json
+          grep 'local-development' /tmp/wf-auto-complete.json
+          test "$(docker exec invarture-workflow-auto-db psql -U invarture -d invarture -tAc "SELECT COUNT(*) FROM platform_audit_events WHERE event_type='workflow.function.executed'")" -eq 1
+
+      - name: Diagnostics on failure
+        if: failure()
+        run: |
+          docker logs invarture-workflow-auto-app || true
+          cat /tmp/wf-function-created.json || true
+          cat /tmp/wf-auto-created.json || true
+          cat /tmp/wf-auto-start.json || true
+          cat /tmp/wf-auto-complete.json || true
+
+      - name: Cleanup
+        if: always()
+        run: |
+          docker rm -f invarture-workflow-auto-app invarture-workflow-auto-db 2>/dev/null || true
+          docker network rm invarture-workflow-auto 2>/dev/null || true
