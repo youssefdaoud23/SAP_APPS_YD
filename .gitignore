@@ -8,3 +8,4 @@ npm-debug.log*
 build-info.json
 test-results/
 playwright-report/
+backups/
