@@ -55,6 +55,7 @@ jobs:
 
           docker run -d --name invarture-auth-oidc --network invarture-auth-net --network-alias oidc.local \
             -p 18084:18084 \
+            -e MOCK_OIDC_HOST=0.0.0.0 \
             -e MOCK_OIDC_PORT=18084 \
             -e MOCK_OIDC_ISSUER=http://oidc.local:18084 \
             --entrypoint node invarture-app-studio:auth-ci tests/mock-oidc.js
