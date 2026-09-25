@@ -1,0 +1,121 @@
+name: V0.7 OIDC Authentication
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  oidc-authentication:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Validate authentication modules
+        run: |
+          node --check lib/secureCookie.js
+          node --check lib/principalResolver.js
+          node --check lib/sessionStore.js
+          node --check lib/oidc.js
+          node --check lib/auth.js
+          node --check api/auth.js
+          node --check tests/mock-oidc.js
+          node --check server.js
+
+      - name: Build App Studio image
+        run: docker build -t invarture-app-studio:auth-ci .
+
+      - name: Start PostgreSQL mock IdP and App Studio
+        run: |
+          echo '127.0.0.1 app.local oidc.local' | sudo tee -a /etc/hosts
+          docker network create invarture-auth-net
+          docker run -d --name invarture-auth-db --network invarture-auth-net \
+            -e POSTGRES_DB=invarture \
+            -e POSTGRES_USER=invarture \
+            -e POSTGRES_PASSWORD=auth_test_password \
+            postgres:17-alpine
+          for i in {1..40}; do
+            if docker exec invarture-auth-db pg_isready -U invarture -d invarture >/dev/null 2>&1; then break; fi
+            sleep 0.5
+          done
+          docker exec invarture-auth-db pg_isready -U invarture -d invarture
+
+          docker run -d --name invarture-auth-oidc --network invarture-auth-net --network-alias oidc.local \
+            -p 18084:18084 \
+            -e MOCK_OIDC_PORT=18084 \
+            -e MOCK_OIDC_ISSUER=http://oidc.local:18084 \
+            --entrypoint node invarture-app-studio:auth-ci tests/mock-oidc.js
+
+          docker run -d --name invarture-auth-app --network invarture-auth-net --network-alias app.local \
+            -p 18085:8081 \
+            -e PORT=8081 \
+            -e DATABASE_URL=postgresql://invarture:auth_test_password@invarture-auth-db:5432/invarture \
+            -e WORKSPACE_STORAGE=postgres \
+            -e AUTH_MODE=oidc \
+            -e APP_BASE_URL=http://app.local:18085 \
+            -e OIDC_ISSUER=http://oidc.local:18084 \
+            -e OIDC_CLIENT_ID=invarture-auth-ci \
+            -e OIDC_SESSION_SECRET=ci_session_secret_longer_than_thirty_two_characters \
+            -e OIDC_ALLOW_HTTP=true \
+            -e OIDC_COOKIE_SECURE=false \
+            -e OIDC_AUTO_PROVISION=true \
+            -e OIDC_DEFAULT_ROLE=viewer \
+            invarture-app-studio:auth-ci
+
+          for i in {1..40}; do
+            if curl --noproxy '*' -fsS http://app.local:18085/healthz >/tmp/auth-health.json; then break; fi
+            sleep 0.5
+          done
+          grep '"ok":true' /tmp/auth-health.json
+          grep '"authMode":"oidc"' /tmp/auth-health.json
+
+      - name: Complete authorization-code PKCE login
+        run: |
+          rm -f /tmp/auth-cookies.txt
+          curl --noproxy '*' -fsSL -c /tmp/auth-cookies.txt -b /tmp/auth-cookies.txt \
+            http://app.local:18085/ -o /tmp/auth-app.html
+          grep 'Invarture' /tmp/auth-app.html
+          curl --noproxy '*' -fsS -b /tmp/auth-cookies.txt http://app.local:18085/auth/me > /tmp/auth-me.json
+          grep '"authenticated":true' /tmp/auth-me.json
+          grep '"authMode":"oidc"' /tmp/auth-me.json
+          grep '"username":"ci.user"' /tmp/auth-me.json
+          grep '"viewer"' /tmp/auth-me.json
+
+      - name: Verify server-side RBAC and session persistence
+        run: |
+          CODE="$(curl --noproxy '*' -s -b /tmp/auth-cookies.txt -o /tmp/auth-security.json -w '%{http_code}' 'http://app.local:18085/api/security?action=summary')"
+          test "$CODE" = "403"
+          grep 'users.manage' /tmp/auth-security.json
+          test "$(docker exec invarture-auth-db psql -U invarture -d invarture -tAc "SELECT COUNT(*) FROM platform_users WHERE username='ci.user'")" -eq 1
+          test "$(docker exec invarture-auth-db psql -U invarture -d invarture -tAc "SELECT COUNT(*) FROM platform_auth_sessions WHERE username='ci.user' AND revoked_at IS NULL AND expires_at > NOW()")" -eq 1
+          test "$(docker exec invarture-auth-db psql -U invarture -d invarture -tAc "SELECT COUNT(*) FROM platform_audit_events WHERE event_type='security.login' AND actor='ci.user'")" -ge 1
+
+      - name: Verify logout revokes session
+        run: |
+          curl --noproxy '*' -sS -c /tmp/auth-cookies.txt -b /tmp/auth-cookies.txt \
+            -o /dev/null http://app.local:18085/auth/logout
+          curl --noproxy '*' -fsS -b /tmp/auth-cookies.txt http://app.local:18085/auth/me > /tmp/auth-after-logout.json
+          grep '"authenticated":false' /tmp/auth-after-logout.json
+          test "$(docker exec invarture-auth-db psql -U invarture -d invarture -tAc "SELECT COUNT(*) FROM platform_auth_sessions WHERE username='ci.user' AND revoked_at IS NOT NULL")" -ge 1
+
+      - name: Print diagnostics on failure
+        if: failure()
+        run: |
+          echo '--- App Studio ---'
+          docker logs invarture-auth-app || true
+          echo '--- Mock OIDC ---'
+          docker logs invarture-auth-oidc || true
+          echo '--- auth me ---'
+          cat /tmp/auth-me.json || true
+          echo '--- security ---'
+          cat /tmp/auth-security.json || true
+
+      - name: Cleanup
+        if: always()
+        run: |
+          docker rm -f invarture-auth-app invarture-auth-oidc invarture-auth-db || true
+          docker network rm invarture-auth-net || true
