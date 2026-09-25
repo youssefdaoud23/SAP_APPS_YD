@@ -4,6 +4,7 @@ const { Readable } = require('stream');
 const database = require('../lib/database');
 const sapConnector = require('../lib/sapConnector');
 const { hasPermission } = require('../lib/securityModel');
+const { authorizeConnectionRequest } = require('../lib/connectionPolicy');
 
 function send(res, status, body) {
   res.statusCode = status;
@@ -102,6 +103,10 @@ module.exports = async function apiRuntimeHandler(req, res) {
     if (!operation) return send(res, 404, { error: 'No published API operation matches this method and path.' });
     if (operation.mode !== 'sap-proxy') return send(res, 501, { error: `Runtime mode ${operation.mode} is not implemented.` });
 
+    const connection = sapConnector.getConnection(operation.connectionId);
+    const decision = authorizeConnectionRequest(req.principal, connection, method);
+    if (!decision.ok) return send(res, decision.status, { error: decision.error });
+
     let upstreamPath = applyParams(operation.upstreamPath, operation.params).replace(/^\/+/, '');
     const incomingQuery = url.searchParams.toString();
     if (incomingQuery) upstreamPath += `${upstreamPath.includes('?') ? '&' : '?'}${incomingQuery}`;
@@ -125,6 +130,7 @@ module.exports = async function apiRuntimeHandler(req, res) {
         slug,
         method,
         path: runtimePath,
+        connectionId: operation.connectionId,
         status: response.status
       }).catch(() => {});
     }
