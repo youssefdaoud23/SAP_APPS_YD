@@ -22,6 +22,7 @@ jobs:
           node --check lib/sessionStore.js
           node --check lib/oidc.js
           node --check lib/auth.js
+          node --check lib/connectionPolicy.js
           node --check api/auth.js
           node --check tests/mock-oidc.js
           node --check server.js
@@ -103,6 +104,15 @@ jobs:
           CODE="$(curl --noproxy '*' -s -b /tmp/auth-cookies.txt -o /tmp/auth-security.json -w '%{http_code}' 'http://app.local:18085/api/security?action=summary')"
           test "$CODE" = "403"
           grep 'users.manage' /tmp/auth-security.json
+
+          API_CODE="$(curl --noproxy '*' -s -b /tmp/auth-cookies.txt -o /tmp/auth-api-admin.json -w '%{http_code}' 'http://app.local:18085/api/apis')"
+          test "$API_CODE" = "403"
+          grep 'api.manage' /tmp/auth-api-admin.json
+
+          WORKSPACE_CODE="$(curl --noproxy '*' -s -b /tmp/auth-cookies.txt -o /tmp/auth-workspace-write.json -w '%{http_code}' -X PUT 'http://app.local:18085/api/workspace' -H 'Content-Type: application/json' --data '{"schemaVersion":2,"apps":[],"connections":[]}')"
+          test "$WORKSPACE_CODE" = "403"
+          grep 'apps.edit' /tmp/auth-workspace-write.json
+
           test "$(docker exec invarture-auth-db psql -U invarture -d invarture -tAc "SELECT COUNT(*) FROM platform_users WHERE username='ci.user'")" -eq 1
           test "$(docker exec invarture-auth-db psql -U invarture -d invarture -tAc "SELECT COUNT(*) FROM platform_auth_sessions WHERE username='ci.user' AND revoked_at IS NULL AND expires_at > NOW()")" -eq 1
           test "$(docker exec invarture-auth-db psql -U invarture -d invarture -tAc "SELECT COUNT(*) FROM platform_audit_events WHERE event_type='security.login' AND actor='ci.user'")" -ge 1
@@ -126,6 +136,10 @@ jobs:
           cat /tmp/auth-me.json || true
           echo '--- security ---'
           cat /tmp/auth-security.json || true
+          echo '--- API admin ---'
+          cat /tmp/auth-api-admin.json || true
+          echo '--- workspace write ---'
+          cat /tmp/auth-workspace-write.json || true
 
       - name: Cleanup
         if: always()
