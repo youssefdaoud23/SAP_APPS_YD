@@ -2,6 +2,8 @@
 
 const workspaceStore = require('../lib/workspaceStore');
 const database = require('../lib/database');
+const auth = require('../lib/auth');
+const oidc = require('../lib/oidc');
 const { PERMISSIONS, ROLES } = require('../lib/securityModel');
 const { getBuildInfo } = require('../lib/buildInfo');
 
@@ -34,7 +36,7 @@ module.exports = async function platformHandler(req, res) {
       },
       database: db,
       security: {
-        authMode: req.principal?.authMode || 'unknown',
+        authMode: auth.mode(),
         principal: req.principal || null,
         counts: security,
         roles: ROLES.map(role => ({ key: role.key, name: role.name, description: role.description, permissions: role.permissions })),
@@ -45,8 +47,9 @@ module.exports = async function platformHandler(req, res) {
         workspaceRevisions: storage.mode === 'postgres',
         auditEvents: db.connected === true,
         persistentIdentityMappings: db.connected === true,
+        persistentSessions: db.connected === true,
         groupsAndRolesSchema: db.connected === true,
-        oidc: false
+        oidc: oidc.enabled()
       }
     });
   } catch (error) {
