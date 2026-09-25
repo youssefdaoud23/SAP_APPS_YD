@@ -1,4 +1,4 @@
-const CACHE = 'invarture-app-studio-v21';
+const CACHE = 'invarture-app-studio-v22';
 const ASSETS = [
   './',
   './index.html',
