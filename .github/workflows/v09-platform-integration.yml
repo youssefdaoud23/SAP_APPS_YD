@@ -1,0 +1,203 @@
+name: V0.9 Platform Integration
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  v09-platform:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Validate v0.9 modules and unit tests
+        run: |
+          node --check lib/componentCatalogV09.js
+          node --check component-library-v09.js
+          node --check lib/workflowStore.js
+          node --check lib/workflowEngine.js
+          node --check api/workflows.js
+          node --check api/workflowRuntime.js
+          node --check workflow-designer-v09.js
+          node --check launchpad-v09.js
+          node --check lib/openapi.js
+          node --check lib/dataMapping.js
+          node --check api/openapi.js
+          node --check api-designer-v09.js
+          node --check lib/rfcConnector.js
+          node --check api/rfc.js
+          node --check rfc-center-v09.js
+          node --check tests/mock-rfc-bridge.js
+          node --check tests/v09-platform.test.js
+          node tests/v09-platform.test.js
+          grep -q 'component-library-v09.js' index.html
+          grep -q 'workflow-designer-v09.js' index.html
+          grep -q 'launchpad-v09.js' index.html
+          grep -q 'api-designer-v09.js' index.html
+          grep -q 'rfc-center-v09.js' index.html
+
+      - name: Build application image
+        run: docker build -t invarture-app-studio:v09-ci .
+
+      - name: Start PostgreSQL SAP RFC mocks and App Studio
+        run: |
+          docker network create invarture-v09-net
+          docker run -d --name invarture-v09-db --network invarture-v09-net \
+            -e POSTGRES_DB=invarture \
+            -e POSTGRES_USER=invarture \
+            -e POSTGRES_PASSWORD=v09_test_password \
+            postgres:17-alpine
+
+          READY=0
+          for i in {1..60}; do
+            if docker exec invarture-v09-db psql -U invarture -d invarture -tAc 'SELECT 1' 2>/dev/null | grep -qx '1'; then
+              sleep 1
+              if docker exec invarture-v09-db psql -U invarture -d invarture -tAc 'SELECT 1' 2>/dev/null | grep -qx '1'; then READY=1; break; fi
+            fi
+            sleep 0.5
+          done
+          test "$READY" = "1"
+
+          docker run -d --name invarture-v09-sap --network invarture-v09-net --network-alias mock-sap \
+            -e MOCK_SAP_HOST=0.0.0.0 -e MOCK_SAP_PORT=18080 \
+            --entrypoint node invarture-app-studio:v09-ci tests/mock-sap.js
+
+          docker run -d --name invarture-v09-rfc --network invarture-v09-net --network-alias mock-rfc \
+            -e MOCK_RFC_HOST=0.0.0.0 -e MOCK_RFC_PORT=18089 \
+            --entrypoint node invarture-app-studio:v09-ci tests/mock-rfc-bridge.js
+
+          docker run -d --name invarture-v09-app --network invarture-v09-net -p 18090:8081 \
+            -e PORT=8081 \
+            -e DATABASE_URL=postgresql://invarture:v09_test_password@invarture-v09-db:5432/invarture \
+            -e WORKSPACE_STORAGE=postgres \
+            -e AUTH_MODE=local \
+            -e SAP_ALLOW_HTTP=true \
+            -e MOCK_USER=test -e MOCK_PASS=secret \
+            -e 'SAP_CONNECTIONS_JSON=[{"id":"mock","name":"Mock SAP","type":"OData V2","baseUrl":"http://mock-sap:18080/service/","auth":"basic","usernameEnv":"MOCK_USER","passwordEnv":"MOCK_PASS","sapClient":"100","sapLanguage":"EN"}]' \
+            -e 'SAP_RFC_CONNECTIONS_JSON=[{"id":"rfc-mock","name":"Mock RFC","baseUrl":"http://mock-rfc:18089/","invokePath":"invoke","healthPath":"health","auth":"none","environment":"DEV","allowedFunctions":["BAPI_USER_GET_DETAIL","BAPI_USER_CHANGE"],"readOnlyFunctions":["BAPI_USER_GET_DETAIL"]}]' \
+            invarture-app-studio:v09-ci
+
+          APP_READY=0
+          for i in {1..60}; do
+            if curl -fsS http://127.0.0.1:18090/healthz >/tmp/v09-health.json; then APP_READY=1; break; fi
+            sleep 0.5
+          done
+          test "$APP_READY" = "1"
+          grep '"ok":true' /tmp/v09-health.json
+
+      - name: Create publish start and approve workflow
+        run: |
+          cat >/tmp/workflow-create.json <<'JSON'
+          {
+            "name":"Purchase Order Approval",
+            "slug":"po-approval",
+            "description":"V0.9 workflow CI",
+            "steps":[
+              {"id":"start","type":"start","next":"review"},
+              {"id":"review","type":"approval","title":"Approve PO {{input.po}}","assignedRole":"platform-admin","approveNext":"approved","rejectNext":"rejected"},
+              {"id":"approved","type":"set","values":{"status":"Approved"},"next":"end"},
+              {"id":"rejected","type":"set","values":{"status":"Rejected"},"next":"end"},
+              {"id":"end","type":"end","result":{"status":"{{data.status}}","po":"{{input.po}}"}}
+            ]
+          }
+          JSON
+          curl -fsS -X POST http://127.0.0.1:18090/api/workflows -H 'Content-Type: application/json' --data-binary @/tmp/workflow-create.json >/tmp/workflow-created.json
+          WORKFLOW_ID="$(node -p "require('/tmp/workflow-created.json').id")"
+          echo "$WORKFLOW_ID" >/tmp/workflow-id
+          grep '"revision":1' /tmp/workflow-created.json
+
+          curl -fsS -X PUT "http://127.0.0.1:18090/api/workflows?id=$WORKFLOW_ID" \
+            -H 'Content-Type: application/json' -H 'If-Match: W/"workflow-1"' --data '{"status":"published"}' >/tmp/workflow-published.json
+          grep '"status":"published"' /tmp/workflow-published.json
+
+          curl -fsS -X POST http://127.0.0.1:18090/runtime/workflows/po-approval/start \
+            -H 'Content-Type: application/json' --data '{"po":"450001"}' >/tmp/workflow-started.json
+          grep '"status":"waiting"' /tmp/workflow-started.json
+          TASK_ID="$(node -p "require('/tmp/workflow-started.json').task.id")"
+          test -n "$TASK_ID"
+          echo "$TASK_ID" >/tmp/task-id
+
+          curl -fsS http://127.0.0.1:18090/runtime/tasks >/tmp/tasks.json
+          grep 'Approve PO 450001' /tmp/tasks.json
+
+          curl -fsS -X POST "http://127.0.0.1:18090/runtime/tasks/$TASK_ID/complete" \
+            -H 'Content-Type: application/json' --data '{"resolution":"approve","payload":{"comment":"CI approved"}}' >/tmp/task-completed.json
+          grep '"status":"completed"' /tmp/task-completed.json
+          grep 'Approved' /tmp/task-completed.json
+
+      - name: Verify OpenAPI and declarative response mapping
+        run: |
+          curl -fsS -X POST http://127.0.0.1:18090/api/apis -H 'Content-Type: application/json' \
+            --data '{"name":"Mapped Products","slug":"mapped-products","description":"OpenAPI mapping CI"}' >/tmp/v09-api.json
+          API_ID="$(node -p "require('/tmp/v09-api.json').id")"
+          echo "$API_ID" >/tmp/v09-api-id
+
+          curl -fsS -X POST "http://127.0.0.1:18090/api/apis?action=operation&apiId=$API_ID" -H 'Content-Type: application/json' \
+            --data '{"method":"GET","path":"/products","summary":"Mapped products","connectionId":"mock","upstreamPath":"Products","mode":"sap-proxy","responseMapping":{"unwrap":"d.results","pick":["ID","Name"],"rename":{"ID":"id"},"wrap":"items","schema":{"type":"object"}}}' >/tmp/v09-api-op.json
+
+          curl -fsS -D /tmp/v09-api-headers.txt "http://127.0.0.1:18090/api/apis?id=$API_ID" >/tmp/v09-api-detail.json
+          ETAG="$(awk 'BEGIN{IGNORECASE=1} /^etag:/ {gsub("\r","",$2); print $2}' /tmp/v09-api-headers.txt)"
+          curl -fsS -X PUT "http://127.0.0.1:18090/api/apis?id=$API_ID" -H 'Content-Type: application/json' -H "If-Match: $ETAG" --data '{"status":"published"}' >/tmp/v09-api-published.json
+
+          curl -fsS http://127.0.0.1:18090/runtime/api/mapped-products/products >/tmp/v09-runtime-map.json
+          grep '"items"' /tmp/v09-runtime-map.json
+          grep '"id":"P100"' /tmp/v09-runtime-map.json
+          grep 'Demo Product' /tmp/v09-runtime-map.json
+          ! grep -q 'Price' /tmp/v09-runtime-map.json
+
+          curl -fsS "http://127.0.0.1:18090/api/openapi?apiId=$API_ID" >/tmp/v09-openapi.json
+          grep '"openapi": "3.1.0"' /tmp/v09-openapi.json
+          grep '"/products"' /tmp/v09-openapi.json
+          curl -fsS http://127.0.0.1:18090/runtime/openapi/mapped-products.json >/tmp/v09-openapi-runtime.json
+          grep 'Mapped Products' /tmp/v09-openapi-runtime.json
+
+      - name: Verify secured RFC and BAPI bridge
+        run: |
+          curl -fsS 'http://127.0.0.1:18090/api/rfc?action=connections' >/tmp/rfc-connections.json
+          grep 'Mock RFC' /tmp/rfc-connections.json
+          ! grep -q 'password' /tmp/rfc-connections.json
+          curl -fsS 'http://127.0.0.1:18090/api/rfc?action=health&id=rfc-mock' >/tmp/rfc-health.json
+          grep '"ok":true' /tmp/rfc-health.json
+
+          curl -fsS -X POST 'http://127.0.0.1:18090/api/rfc?action=invoke&id=rfc-mock' -H 'Content-Type: application/json' \
+            --data '{"function":"BAPI_USER_GET_DETAIL","parameters":{"USERNAME":"DEMO"}}' >/tmp/rfc-call.json
+          grep 'BAPI_USER_GET_DETAIL' /tmp/rfc-call.json
+          grep 'Mock RFC call completed' /tmp/rfc-call.json
+          grep '"readOnly":true' /tmp/rfc-call.json
+
+          CODE="$(curl -s -o /tmp/rfc-denied.json -w '%{http_code}' -X POST 'http://127.0.0.1:18090/api/rfc?action=invoke&id=rfc-mock' -H 'Content-Type: application/json' --data '{"function":"RFC_SYSTEM_INFO","parameters":{}}')"
+          test "$CODE" = "403"
+          grep 'not allow-listed' /tmp/rfc-denied.json
+
+      - name: Verify persistence and audit
+        run: |
+          test "$(docker exec invarture-v09-db psql -U invarture -d invarture -tAc 'SELECT COUNT(*) FROM platform_workflows')" -eq 1
+          test "$(docker exec invarture-v09-db psql -U invarture -d invarture -tAc 'SELECT COUNT(*) FROM platform_workflow_instances WHERE status='"'"'completed'"'"'')" -eq 1
+          test "$(docker exec invarture-v09-db psql -U invarture -d invarture -tAc 'SELECT COUNT(*) FROM platform_workflow_tasks WHERE status='"'"'completed'"'"'')" -eq 1
+          test "$(docker exec invarture-v09-db psql -U invarture -d invarture -tAc "SELECT COUNT(*) FROM platform_audit_events WHERE event_type='workflow.instance.completed'")" -ge 1
+          test "$(docker exec invarture-v09-db psql -U invarture -d invarture -tAc "SELECT COUNT(*) FROM platform_audit_events WHERE event_type='rfc.invoked'")" -ge 1
+
+      - name: Print diagnostics on failure
+        if: failure()
+        run: |
+          docker logs invarture-v09-app || true
+          docker logs invarture-v09-sap || true
+          docker logs invarture-v09-rfc || true
+          cat /tmp/workflow-started.json || true
+          cat /tmp/task-completed.json || true
+          cat /tmp/v09-runtime-map.json || true
+          cat /tmp/v09-openapi.json || true
+          cat /tmp/rfc-call.json || true
+          cat /tmp/rfc-denied.json || true
+
+      - name: Cleanup
+        if: always()
+        run: |
+          docker rm -f invarture-v09-app invarture-v09-rfc invarture-v09-sap invarture-v09-db || true
+          docker network rm invarture-v09-net || true
