@@ -1,0 +1,150 @@
+name: V0.8 Server Functions
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  server-functions:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Validate Server Functions modules
+        run: |
+          node --check lib/functionStore.js
+          node --check lib/functionEngine.js
+          node --check lib/connectionPolicy.js
+          node --check api/functions.js
+          node --check api/functionRuntime.js
+          node --check server-functions-v08.js
+          node --check server.js
+          node tests/function-engine.test.js
+          grep -q 'server-functions-v08.js' index.html
+          grep -q 'server-functions-v08.js' sw.js
+          grep -q '/runtime/functions/' sw.js
+
+      - name: Build application image
+        run: docker build -t invarture-app-studio:function-ci .
+
+      - name: Start PostgreSQL SAP mock and App Studio
+        run: |
+          docker network create invarture-function-net
+          docker run -d --name invarture-function-db --network invarture-function-net \
+            -e POSTGRES_DB=invarture \
+            -e POSTGRES_USER=invarture \
+            -e POSTGRES_PASSWORD=function_test_password \
+            postgres:17-alpine
+
+          READY=0
+          for i in {1..60}; do
+            if docker exec invarture-function-db psql -U invarture -d invarture -tAc 'SELECT 1' 2>/dev/null | grep -qx '1'; then
+              sleep 1
+              if docker exec invarture-function-db psql -U invarture -d invarture -tAc 'SELECT 1' 2>/dev/null | grep -qx '1'; then READY=1; break; fi
+            fi
+            sleep 0.5
+          done
+          test "$READY" = "1"
+
+          docker run -d --name invarture-function-sap --network invarture-function-net --network-alias mock-sap \
+            -e MOCK_SAP_HOST=0.0.0.0 \
+            -e MOCK_SAP_PORT=18080 \
+            --entrypoint node invarture-app-studio:function-ci tests/mock-sap.js
+
+          docker run -d --name invarture-function-app --network invarture-function-net -p 18087:8081 \
+            -e PORT=8081 \
+            -e DATABASE_URL=postgresql://invarture:function_test_password@invarture-function-db:5432/invarture \
+            -e WORKSPACE_STORAGE=postgres \
+            -e AUTH_MODE=local \
+            -e SAP_ALLOW_HTTP=true \
+            -e MOCK_USER=test \
+            -e MOCK_PASS=secret \
+            -e 'SAP_CONNECTIONS_JSON=[{"id":"mock","name":"Mock SAP","type":"OData V2","baseUrl":"http://mock-sap:18080/service/","auth":"basic","usernameEnv":"MOCK_USER","passwordEnv":"MOCK_PASS","sapClient":"100","sapLanguage":"EN"}]' \
+            invarture-app-studio:function-ci
+
+          APP_READY=0
+          for i in {1..60}; do
+            if curl -fsS http://127.0.0.1:18087/healthz >/tmp/function-health.json; then APP_READY=1; break; fi
+            sleep 0.5
+          done
+          test "$APP_READY" = "1"
+
+      - name: Create and publish SAP-backed server function
+        run: |
+          cat >/tmp/function-create.json <<'JSON'
+          {
+            "name":"Product Summary",
+            "slug":"product-summary",
+            "description":"Server function CI test",
+            "inputSchema":{"required":["requestedBy"],"properties":{"requestedBy":{"type":"string"}}},
+            "steps":[
+              {"type":"set","key":"message","value":"Requested by {{input.requestedBy}}"},
+              {"type":"sap-request","key":"products","connectionId":"mock","method":"GET","path":"Products"},
+              {"type":"respond","value":{"message":"{{vars.message}}","products":"{{steps.products.data.d.results}}","principal":"{{principal.username}}"}}
+            ]
+          }
+          JSON
+          curl -fsS -X POST http://127.0.0.1:18087/api/functions \
+            -H 'Content-Type: application/json' --data-binary @/tmp/function-create.json > /tmp/function-created.json
+          FUNCTION_ID="$(node -p "require('/tmp/function-created.json').id")"
+          test -n "$FUNCTION_ID"
+          echo "$FUNCTION_ID" > /tmp/function-id
+          grep '"revision":1' /tmp/function-created.json
+
+          CODE="$(curl -s -o /tmp/function-draft.json -w '%{http_code}' -X POST http://127.0.0.1:18087/runtime/functions/product-summary -H 'Content-Type: application/json' --data '{"requestedBy":"CI"}')"
+          test "$CODE" = "404"
+
+          curl -fsS -D /tmp/function-headers.txt "http://127.0.0.1:18087/api/functions?id=$FUNCTION_ID" > /tmp/function-detail.json
+          ETAG="$(awk 'BEGIN{IGNORECASE=1} /^etag:/ {gsub("\r","",$2); print $2}' /tmp/function-headers.txt)"
+          test -n "$ETAG"
+          curl -fsS -X PUT "http://127.0.0.1:18087/api/functions?id=$FUNCTION_ID" \
+            -H 'Content-Type: application/json' -H "If-Match: $ETAG" \
+            --data '{"status":"published"}' > /tmp/function-published.json
+          grep '"status":"published"' /tmp/function-published.json
+          grep '"revision":2' /tmp/function-published.json
+
+      - name: Execute function and validate input handling
+        run: |
+          curl -fsS -X POST http://127.0.0.1:18087/runtime/functions/product-summary \
+            -H 'Content-Type: application/json' --data '{"requestedBy":"CI"}' > /tmp/function-runtime.json
+          grep 'Demo Product' /tmp/function-runtime.json
+          grep 'Requested by CI' /tmp/function-runtime.json
+          grep 'local-development' /tmp/function-runtime.json
+
+          CODE="$(curl -s -o /tmp/function-validation.json -w '%{http_code}' -X POST http://127.0.0.1:18087/runtime/functions/product-summary -H 'Content-Type: application/json' --data '{}')"
+          test "$CODE" = "400"
+          grep 'Required input field requestedBy' /tmp/function-validation.json
+
+      - name: Verify optimistic locking and audit
+        run: |
+          FUNCTION_ID="$(cat /tmp/function-id)"
+          CODE="$(curl -s -o /tmp/function-conflict.json -w '%{http_code}' -X PUT "http://127.0.0.1:18087/api/functions?id=$FUNCTION_ID" -H 'Content-Type: application/json' -H 'If-Match: W/"function-1"' --data '{"description":"stale"}')"
+          test "$CODE" = "409"
+          grep 'changed on the server' /tmp/function-conflict.json
+          test "$(docker exec invarture-function-db psql -U invarture -d invarture -tAc 'SELECT COUNT(*) FROM platform_server_functions')" -eq 1
+          test "$(docker exec invarture-function-db psql -U invarture -d invarture -tAc "SELECT COUNT(*) FROM platform_audit_events WHERE event_type='function.executed' AND details->>'success'='true'")" -ge 1
+
+      - name: Print diagnostics on failure
+        if: failure()
+        run: |
+          echo '--- App Studio ---'
+          docker logs invarture-function-app || true
+          echo '--- Mock SAP ---'
+          docker logs invarture-function-sap || true
+          echo '--- function ---'
+          cat /tmp/function-created.json || true
+          echo '--- runtime ---'
+          cat /tmp/function-runtime.json || true
+          echo '--- validation ---'
+          cat /tmp/function-validation.json || true
+
+      - name: Cleanup
+        if: always()
+        run: |
+          docker rm -f invarture-function-app invarture-function-sap invarture-function-db || true
+          docker network rm invarture-function-net || true
