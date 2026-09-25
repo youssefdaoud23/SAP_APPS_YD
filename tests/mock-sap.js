@@ -3,6 +3,7 @@
 const http = require('http');
 
 const PORT = Number(process.env.MOCK_SAP_PORT || 18080);
+const HOST = process.env.MOCK_SAP_HOST || '127.0.0.1';
 const expected = `Basic ${Buffer.from('test:secret').toString('base64')}`;
 const metadata = `<?xml version="1.0" encoding="utf-8"?>
 <edmx:Edmx Version="1.0" xmlns:edmx="http://schemas.microsoft.com/ado/2007/06/edmx">
@@ -62,4 +63,4 @@ const server = http.createServer((req, res) => {
   res.end('Not found');
 });
 
-server.listen(PORT, '127.0.0.1', () => console.log(`Mock SAP listening on ${PORT}`));
+server.listen(PORT, HOST, () => console.log(`Mock SAP listening on ${HOST}:${PORT}`));
