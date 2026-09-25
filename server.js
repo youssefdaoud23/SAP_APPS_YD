@@ -7,6 +7,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const sapApi = require('./api/sap');
+const rfcApi = require('./api/rfc');
 const workspaceApi = require('./api/workspace');
 const versionApi = require('./api/version');
 const platformApi = require('./api/platform');
@@ -14,6 +15,7 @@ const securityApi = require('./api/security');
 const auditApi = require('./api/audit');
 const deploymentsApi = require('./api/deployments');
 const apisApi = require('./api/apis');
+const openApi = require('./api/openapi');
 const apiRuntime = require('./api/apiRuntime');
 const functionsApi = require('./api/functions');
 const functionRuntime = require('./api/functionRuntime');
@@ -86,6 +88,7 @@ const server = http.createServer(async (req, res) => {
     req.principal = await auth.resolvePrincipal(req);
     if (!req.principal) return auth.unauthorized(req, res);
 
+    if (req.url.startsWith('/runtime/openapi/')) return openApi(req, res);
     if (req.url.startsWith('/runtime/api/')) return apiRuntime(req, res);
     if (req.url.startsWith('/runtime/functions/')) return functionRuntime(req, res);
     if (req.url.startsWith('/runtime/workflows/') || req.url.startsWith('/runtime/tasks') || req.url.startsWith('/runtime/workflow-instances/')) return workflowRuntime(req, res);
@@ -94,9 +97,11 @@ const server = http.createServer(async (req, res) => {
     if (req.url.startsWith('/api/security')) return securityApi(req, res);
     if (req.url.startsWith('/api/audit')) return auditApi(req, res);
     if (req.url.startsWith('/api/deployments')) return deploymentsApi(req, res);
+    if (req.url.startsWith('/api/openapi')) return openApi(req, res);
     if (req.url.startsWith('/api/apis')) return apisApi(req, res);
     if (req.url.startsWith('/api/functions')) return functionsApi(req, res);
     if (req.url.startsWith('/api/workflows')) return workflowsApi(req, res);
+    if (req.url.startsWith('/api/rfc')) return rfcApi(req, res);
     if (req.url.startsWith('/api/sap')) return sapApi(req, res);
     if (req.url.startsWith('/api/workspace')) return workspaceApi(req, res);
     return serveStatic(req, res);
@@ -131,6 +136,7 @@ async function start() {
     console.log(`Authentication mode: ${auth.mode()}`);
     if (auth.mode() === 'local') console.log('Local development receives the transitional platform-admin role.');
     if (!process.env.SAP_CONNECTIONS_JSON) console.log('SAP_CONNECTIONS_JSON is not set: Connection Center will show no server-side SAP connections.');
+    if (!process.env.SAP_RFC_CONNECTIONS_JSON) console.log('SAP_RFC_CONNECTIONS_JSON is not set: RFC/BAPI Center will show no bridge connections.');
   });
 }
 
