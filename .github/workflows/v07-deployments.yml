@@ -35,21 +35,29 @@ jobs:
             -e POSTGRES_USER=invarture \
             -e POSTGRES_PASSWORD=ci_v07_password \
             postgres:17-alpine
-          for i in {1..40}; do
-            if docker exec invarture-v07-db pg_isready -U invarture -d invarture >/dev/null 2>&1; then break; fi
+
+          READY=0
+          for i in {1..60}; do
+            if docker exec invarture-v07-db psql -U invarture -d invarture -tAc 'SELECT 1' 2>/dev/null | grep -qx '1'; then
+              sleep 1
+              if docker exec invarture-v07-db psql -U invarture -d invarture -tAc 'SELECT 1' 2>/dev/null | grep -qx '1'; then READY=1; break; fi
+            fi
             sleep 0.5
           done
-          docker exec invarture-v07-db pg_isready -U invarture -d invarture
+          test "$READY" = "1"
 
           docker run -d --name invarture-v07-app --network invarture-v07-ci -p 18087:8081 \
             -e WORKSPACE_STORAGE=postgres \
             -e DATABASE_URL=postgresql://invarture:ci_v07_password@invarture-v07-db:5432/invarture \
             invarture-app-studio:v07-ci
-          for i in {1..40}; do
-            if curl -fsS http://127.0.0.1:18087/healthz >/dev/null; then break; fi
+
+          APP_READY=0
+          for i in {1..60}; do
+            if curl -fsS http://127.0.0.1:18087/healthz >/tmp/v07-health.json; then APP_READY=1; break; fi
             sleep 0.5
           done
-          curl -fsS http://127.0.0.1:18087/healthz | grep '"ok":true'
+          test "$APP_READY" = "1"
+          grep '"ok":true' /tmp/v07-health.json
 
       - name: Verify seeded environments
         run: |
