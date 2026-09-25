@@ -59,6 +59,17 @@ jobs:
             -e MOCK_OIDC_ISSUER=http://oidc.local:18084 \
             --entrypoint node invarture-app-studio:auth-ci tests/mock-oidc.js
 
+          OIDC_READY=0
+          for i in {1..60}; do
+            if curl --noproxy '*' -fsS http://oidc.local:18084/.well-known/openid-configuration >/tmp/oidc-discovery.json; then
+              OIDC_READY=1
+              break
+            fi
+            sleep 0.25
+          done
+          test "$OIDC_READY" = "1"
+          grep '"authorization_endpoint"' /tmp/oidc-discovery.json
+
           docker run -d --name invarture-auth-app --network invarture-auth-net --network-alias app.local \
             -p 18085:8081 \
             -e PORT=8081 \
