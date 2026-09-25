@@ -1,28 +1,14 @@
 # Invarture App Studio
 
-Invarture App Studio is an Invarture-branded, SAP-focused low-code application platform built as a clean-room alternative to proprietary SAP application platforms.
+Invarture App Studio is an Invarture-branded, SAP-focused low-code application platform being built as a clean-room, lighter alternative to proprietary SAP application platforms.
 
 ## Current build
 
-**v0.6.0**
+**v0.8.0**
 
-V0.6 adds the first shared enterprise platform foundation while preserving the existing SAP designer/runtime functionality.
+V0.8 combines the visual SAP application builder with shared PostgreSQL persistence, RBAC, governed deployment, generic OIDC authentication, reusable APIs and safe declarative Server Functions.
 
-Highlights:
-
-- PostgreSQL-backed shared workspace storage by default in Docker
-- numeric workspace revisions and ETag optimistic locking
-- stale-write protection with HTTP 409 instead of silent overwrite
-- persistent users, groups, roles and permission mappings
-- built-in Platform Admin, Developer, Publisher and Viewer roles
-- audit-event persistence
-- Settings runtime/database/security status
-- Users & groups administration UI
-- file-backed workspace mode retained for compatibility
-- exact product version + Git SHA shown by the running application
-- native port 8081 throughout the Docker deployment
-
-Authentication is still transitional in V0.6. HTTP Basic or local-development mode maps to Platform Admin while OIDC/Microsoft Entra integration is built next. Persistent users are authorization/identity mappings, not password accounts.
+AI/MCP functionality is intentionally out of scope for the current roadmap.
 
 ## Fresh clone
 
@@ -32,59 +18,29 @@ cd SAP_APPS_YD
 sudo docker compose up -d --build
 ```
 
-No `.env` file is required for the first local startup.
-
 Open:
 
 ```text
 http://localhost:8081
 ```
 
-The Docker stack now contains:
+The default Docker stack contains:
 
 - `invarture-app-studio` on port 8081
-- `invarture-postgres` on the private Compose network
+- PostgreSQL on the private Compose network
 
-Check status:
+No `.env` file is required for the first local-development startup.
 
-```bash
-sudo docker compose ps
-```
-
-Verify the server and running build:
+Verify the server and exact build:
 
 ```bash
 curl http://127.0.0.1:8081/healthz
 curl http://127.0.0.1:8081/api/version
 git rev-parse --short=8 HEAD
+sudo docker compose exec -T invarture-app-studio cat /app/build-info.json
 ```
 
-The Git SHA from the repository should match the SHA displayed by App Studio and `/api/version`.
-
-## Optional local configuration
-
-Create `.env` when you are ready to configure authentication, PostgreSQL credentials or SAP connections:
-
-```bash
-cp .env.example .env
-nano .env
-sudo docker compose up -d --build --force-recreate
-```
-
-Important V0.6 variables:
-
-```dotenv
-PORT=8081
-POSTGRES_PASSWORD=
-WORKSPACE_STORAGE=postgres
-APP_STUDIO_USER=
-APP_STUDIO_PASSWORD=
-SAP_CONNECTIONS_JSON=[]
-```
-
-Before exposing the stack beyond local development, set a strong PostgreSQL password and configure authentication.
-
-`.env` is excluded from Git and from the Docker build context.
+The Git SHA shown by the running application must match the checked-out repository SHA.
 
 ## Normal update flow
 
@@ -93,60 +49,16 @@ git pull
 sudo docker compose up -d --build
 ```
 
-Then verify:
+Do not use `docker compose down -v` during an ordinary update. `-v` removes persistent PostgreSQL/workspace volumes.
 
-```bash
-git rev-parse --short=8 HEAD
-sudo docker compose exec -T invarture-app-studio cat /app/build-info.json
-```
-
-The SHA values must match.
-
-## V0.6 shared workspace
-
-Docker uses PostgreSQL for the shared workspace by default.
-
-The shared workspace stores:
-
-- application/workspace JSON
-- ETag
-- revision number
-- update time
-- updating principal
-
-The **Server Sync** panel shows the storage backend and revision. If two browsers start from the same revision and one saves first, the other browser receives a conflict instead of silently overwriting the newer workspace.
-
-File mode is still supported for direct/local Node deployments:
-
-```dotenv
-WORKSPACE_STORAGE=file
-WORKSPACE_FILE=/app/data/workspace.json
-```
-
-## V0.6 users, groups and roles
-
-Open **Settings -> Shared platform -> Users & groups**.
-
-The current built-in roles are:
-
-- Platform Admin
-- Developer
-- Publisher
-- Viewer
-
-Persistent users and groups can be created and assigned roles. These records are designed to become the authorization mappings for OIDC/Microsoft Entra identities and groups in the next milestone.
-
-Current server-side permission enforcement has begun with shared workspace writes and security administration. Frontend visibility is never considered a security boundary.
-
-## Current platform capabilities
+## Current capabilities
 
 ### Visual App Studio
 
-- Invarture-branded workspace and launchpad
 - multi-page applications
-- drag-and-drop application designer
+- drag-and-drop components
 - component hierarchy and property inspector
-- desktop/tablet/mobile previews
+- desktop, tablet and mobile preview
 - nested layouts
 - reusable fragments
 - application templates
@@ -156,102 +68,192 @@ Current server-side permission enforcement has begun with shared workspace write
 - visual button actions
 - OData query builder
 - application validation
-- snapshots/version restore
+- snapshots and restore
 - JSON import/export
 - command palette
-- developer diagnostics
+- developer/network diagnostics
 - dark/light/system themes
 
-### SAP/API connectivity
+### SAP connectivity
 
-- server-side connection registry
-- SAP OData V2 and V4
+- server-side SAP connection registry
+- OData V2 and V4
 - REST endpoints
-- Basic authentication
-- bearer tokens
-- OAuth2 client credentials
-- API-key authentication
-- SAP client/language parameters
+- Basic, Bearer, OAuth2 client-credentials and API-key authentication
+- SAP client/language defaults
 - `$metadata` discovery
 - EntitySet/property browser
 - live SAP data
-- SAP CSRF/session flow for POST/PUT/PATCH/DELETE
-- logical aliases such as `SAP_PRIMARY`
-- DEV/QAS/PRD environment mapping
-- environment-aware reads and writes
+- centralized CSRF/session handling for writes
+- GET/POST/PUT/PATCH/DELETE
+- logical connection aliases
+- environment-aware DEV/QAS/PRD mappings
+- bounded upstream timeouts
 
-### Platform infrastructure
+SAP secrets remain server-side.
 
-- Node.js server
-- PostgreSQL 17 Docker service
+### Shared platform
+
+- PostgreSQL-backed workspace storage
 - file-storage fallback
-- Docker and Docker Compose
-- port 8081 end to end
-- healthcheck
-- server workspace sync
 - ETag optimistic locking
 - numeric workspace revisions
-- persistent RBAC schema
-- persistent user/group mappings
-- audit-event storage
-- platform status API
-- exact version/Git build fingerprint
-- PWA shell with network-first refresh behavior
-- GitHub Actions
-- mock SAP integration tests
-- real PostgreSQL CI integration tests
+- users and groups
+- group memberships
+- roles and permissions
+- Platform Admin, Developer, Publisher and Viewer built-in roles
+- audit log and Audit Log UI
+- runtime/platform status
+- exact version + Git fingerprint
 
-## Useful commands
+### Authentication
 
-```bash
-sudo docker compose ps
-sudo docker compose logs --tail=100 invarture-app-studio
-sudo docker compose logs --tail=100 postgres
-curl http://127.0.0.1:8081/healthz
-curl http://127.0.0.1:8081/api/version
-curl http://127.0.0.1:8081/api/platform
+Supported modes:
+
+- `local` for local development
+- HTTP Basic
+- generic OIDC using Authorization Code + PKCE
+
+The OIDC implementation includes discovery, JWKS signature validation, state/nonce checks, issuer/audience/time validation, encrypted temporary transaction cookies and opaque PostgreSQL-backed sessions.
+
+It is designed for Microsoft Entra ID configuration but V0.8 has been automatically tested against a standards-compatible mock provider, not yet against a real Entra tenant.
+
+### Server-side authorization
+
+Backend APIs now enforce permissions for shared workspace operations, identity administration, audit access, reusable API management and SAP access.
+
+SAP access requires `connections.view`. Reads require `apps.view`. Writes require `apps.edit`. A write to a connection explicitly marked production additionally requires `production.write`.
+
+### Deployment governance
+
+- DEV/QAS/PRD environments
+- custom environments such as UAT
+- environment connection aliases
+- immutable deployed application snapshots
+- SHA-256 snapshot checksums
+- deployment history
+- DEV -> QAS -> PRD promotion
+- protected production behavior
+- production draft blocking
+- rollback as a new immutable deployment
+- deployment audit events
+
+### API Designer
+
+The API Designer creates reusable governed APIs stored in PostgreSQL.
+
+V0.8 supports:
+
+- API definitions with revisioning and draft/published/disabled state
+- GET/POST/PUT/PATCH/DELETE operations
+- path parameters such as `{id}`
+- safe headers
+- configured SAP connection selection
+- upstream SAP paths
+- bounded timeouts
+- optimistic-lock conflict handling
+- published runtime routes under `/runtime/api/<slug>/...`
+- centralized SAP authentication and CSRF behavior
+- production-write authorization
+- runtime write audit events
+
+V0.8 runtime mode is currently `sap-proxy`. Request/response mapping metadata is stored but transformation execution and OpenAPI tooling are future work.
+
+### Server Functions
+
+Server Functions provide reusable server-side business logic without executing arbitrary JavaScript inside the Node process.
+
+V0.8 uses a constrained declarative pipeline with these step types:
+
+- `require`
+- `set`
+- `sap-request`
+- `respond`
+
+Published functions run through:
+
+```text
+POST /runtime/functions/<function-slug>
 ```
 
-A complete local reset, including PostgreSQL/workspace volumes, is destructive:
+They support input schemas, templates, SAP calls, revision locking, bounded execution, input/output limits and audit events.
+
+See `docs/V0.8.md` for the detailed runtime model and limitations.
+
+## Configuration
+
+Create local configuration when needed:
 
 ```bash
-sudo docker compose down -v --remove-orphans
-sudo docker compose up -d --build
+cp .env.example .env
+nano .env
+sudo docker compose up -d --build --force-recreate
 ```
 
-Do not use `-v` during ordinary updates if you want to keep shared workspace and identity data.
+Important settings include:
 
-## Security
+```dotenv
+PORT=8081
+AUTH_MODE=local
+POSTGRES_PASSWORD=
+WORKSPACE_STORAGE=postgres
+SAP_CONNECTIONS_JSON=[]
+```
 
-- SAP passwords/tokens stay server-side.
-- `.env` is ignored by Git and Docker build context.
-- browser definitions contain only safe connection descriptors and aliases.
-- SAP connector requests are confined to configured service roots.
-- production SAP endpoints should use HTTPS.
-- SAP mutations use centralized CSRF/session handling.
-- shared workspace writes use server-side permission checks.
-- identity administration requires `users.manage`.
-- audit records are stored server-side in PostgreSQL.
-- V0.6 Basic/local authentication is transitional, not final enterprise authentication.
+For OIDC/Entra-style authentication, configure the `OIDC_*` settings documented in `.env.example` and set:
+
+```dotenv
+AUTH_MODE=oidc
+```
+
+Production OIDC and SAP endpoints should use HTTPS.
+
+## CI and validation
+
+The repository contains separate GitHub Actions integration suites for:
+
+- core App Studio, SAP and PostgreSQL behavior
+- deployment governance
+- OIDC authentication/session/RBAC behavior
+- API Designer/runtime
+- Server Functions/runtime
+
+The integration suites build actual Docker images and exercise real PostgreSQL containers. SAP and OIDC dependencies are represented by controlled test providers.
+
+## Current limitations
+
+This is not yet broad Neptune feature parity. Major future areas include:
+
+- richer enterprise component library
+- Workflow Designer and task inbox
+- stronger Launchpad Designer
+- API request/response transformations and OpenAPI tooling
+- isolated script-capable Server Functions, if required
+- RFC/BAPI integration
+- Microsoft Graph expansion for Entra group-overage claims
+- browser-level E2E coverage
+- mobile/offline capabilities
+
+AI/MCP integration is intentionally deferred.
 
 ## Documentation
 
-- `docs/V0.6.md` - shared persistence and identity milestone
-- `docs/AUTHORIZATION.md` - roles, permissions and future OIDC flow
-- `docs/V0.5.md` - V0.5 designer/model milestone
+- `docs/V0.8.md` - authentication, API Designer and Server Functions
+- `docs/V0.6.md` - shared persistence and identity foundation
+- `docs/AUTHORIZATION.md` - authorization model
+- `docs/V0.5.md` - designer/model milestone
 - `docs/ARCHITECTURE.md`
 - `docs/APPLICATION_SCHEMA.md`
 - `docs/CONNECTIONS.md`
 - `docs/VERSIONING.md`
 
-## Next milestone
+## Security notes
 
-The next major platform work is V0.7:
+- `.env` is excluded from Git and the Docker build context.
+- SAP secrets remain server-side.
+- OIDC sessions use opaque browser tokens and store only token hashes in PostgreSQL.
+- production SAP writes can be independently restricted with `production.write`.
+- runtime APIs and Server Functions are excluded from PWA caching.
+- frontend visibility is never treated as the authorization boundary.
 
-- Microsoft Entra ID / generic OIDC authentication
-- resolving persistent user/group mappings into effective permissions
-- stronger server-side enforcement across connections, publishing and SAP writes
-- formal DEV/QAS/PRD promotion and deployment history
-- immutable deployed application versions
-
-The repository should remain directly cloneable and testable on Ubuntu/WSL with `docker compose up -d --build` throughout the evolution.
+The project should remain directly cloneable and testable on Ubuntu/WSL with `docker compose up -d --build` and port **8081** throughout its evolution.
