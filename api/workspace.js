@@ -49,6 +49,9 @@ function revisionHeaders(result) {
 module.exports = async function workspaceHandler(req, res) {
   try {
     if (req.method === 'GET') {
+      if (req.principal && !hasPermission(req.principal, 'apps.view')) {
+        return json(res, 403, { error: 'Permission apps.view is required to read the shared workspace.' });
+      }
       const current = await workspaceStore.get();
       if (!current.enabled) return json(res, 200, { enabled: false, reason: 'Workspace storage is not configured', storage: current.mode });
       if (!current.exists) {
