@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const FALLBACK_VERSION = '0.7.0';
+  const FALLBACK_VERSION = '0.8.0';
   let buildInfo = null;
   let loading = false;
   let applyQueued = false;
