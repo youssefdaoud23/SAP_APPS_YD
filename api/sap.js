@@ -3,10 +3,13 @@
 const {
   parseConnections,
   publicConnection,
+  getConnection,
   requestConnection,
   health,
   metadata
 } = require('../lib/sapConnector');
+const { hasPermission } = require('../lib/securityModel');
+const { authorizeConnectionRequest } = require('../lib/connectionPolicy');
 
 function json(res, status, body) {
   res.statusCode = status;
@@ -33,16 +36,20 @@ module.exports = async function handler(req, res) {
     const id = url.searchParams.get('id') || '';
 
     if (action === 'connections') {
+      if (!hasPermission(req.principal, 'connections.view')) return json(res, 403, { error: 'Permission connections.view is required.' });
       return json(res, 200, { connections: parseConnections().map(publicConnection) });
     }
 
     if (!id) return json(res, 400, { error: 'Connection id is required' });
+    const connection = getConnection(id);
 
     if (action === 'health') {
+      if (!hasPermission(req.principal, 'connections.view')) return json(res, 403, { error: 'Permission connections.view is required.' });
       return json(res, 200, await health(id));
     }
 
     if (action === 'metadata') {
+      if (!hasPermission(req.principal, 'connections.view')) return json(res, 403, { error: 'Permission connections.view is required.' });
       const result = await metadata(id);
       return json(res, 200, result);
     }
@@ -52,6 +59,8 @@ module.exports = async function handler(req, res) {
       const method = String(req.method || 'GET').toUpperCase();
       const allowed = ['GET','POST','PUT','PATCH','DELETE'];
       if (!allowed.includes(method)) return json(res, 405, { error: `Method ${method} is not allowed` });
+      const decision = authorizeConnectionRequest(req.principal, connection, method);
+      if (!decision.ok) return json(res, decision.status, { error: decision.error });
       const body = ['GET','HEAD'].includes(method) ? undefined : await readBody(req);
       const headers = {};
       if (req.headers['content-type']) headers['Content-Type'] = req.headers['content-type'];
