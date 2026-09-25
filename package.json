@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
-    "test": "node tests/platform-model.test.js && node tests/security-model.test.js",
+    "test": "node tests/platform-model.test.js && node tests/security-model.test.js && node tests/function-engine.test.js",
     "build:info": "node scripts/generate-build-info.js"
   },
   "dependencies": {
