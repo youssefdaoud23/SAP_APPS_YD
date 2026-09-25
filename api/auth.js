@@ -129,13 +129,14 @@ async function me(req, res) {
 module.exports = async function authHandler(req, res) {
   try {
     const url = new URL(req.url, 'http://localhost');
-    if (req.method === 'GET' && url.pathname === '/auth/login') return login(req, res, url);
-    if (req.method === 'GET' && url.pathname === '/auth/callback') return callback(req, res, url);
-    if ((req.method === 'GET' || req.method === 'POST') && url.pathname === '/auth/logout') return logout(req, res, url);
-    if (req.method === 'GET' && url.pathname === '/auth/me') return me(req, res);
+    if (req.method === 'GET' && url.pathname === '/auth/login') return await login(req, res, url);
+    if (req.method === 'GET' && url.pathname === '/auth/callback') return await callback(req, res, url);
+    if ((req.method === 'GET' || req.method === 'POST') && url.pathname === '/auth/logout') return await logout(req, res, url);
+    if (req.method === 'GET' && url.pathname === '/auth/me') return await me(req, res);
     return sendJson(res, 404, { error: 'Unknown authentication route.' });
   } catch (error) {
     console.error('Authentication error:', error.message);
-    return sendJson(res, Number(error.statusCode) || 500, { error: error.message || 'Authentication failed.' });
+    if (res.headersSent) return res.end();
+    return sendJson(res, Number(error.statusCode) || 502, { error: error.message || 'Authentication failed.' });
   }
 };
