@@ -6,7 +6,6 @@ loadEnvFile();
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const crypto = require('crypto');
 const sapApi = require('./api/sap');
 const workspaceApi = require('./api/workspace');
 const versionApi = require('./api/version');
@@ -14,9 +13,11 @@ const platformApi = require('./api/platform');
 const securityApi = require('./api/security');
 const auditApi = require('./api/audit');
 const deploymentsApi = require('./api/deployments');
+const authApi = require('./api/auth');
+const auth = require('./lib/auth');
+const oidc = require('./lib/oidc');
 const database = require('./lib/database');
 const workspaceStore = require('./lib/workspaceStore');
-const { principal } = require('./lib/securityModel');
 const { getBuildInfo } = require('./lib/buildInfo');
 
 const PORT = Number(process.env.PORT || 8081);
@@ -42,36 +43,11 @@ function applySecurityHeaders(res) {
   res.setHeader('X-Invarture-Commit', BUILD_INFO.shortCommit || 'unavailable');
 }
 
-function authRequired() {
-  return Boolean(process.env.APP_STUDIO_USER && process.env.APP_STUDIO_PASSWORD);
-}
-
-function authorized(req) {
-  if (!authRequired()) return true;
-  const supplied = String(req.headers.authorization || '');
-  const expected = `Basic ${Buffer.from(`${process.env.APP_STUDIO_USER}:${process.env.APP_STUDIO_PASSWORD}`).toString('base64')}`;
-  const a = Buffer.from(supplied);
-  const b = Buffer.from(expected);
-  return a.length === b.length && crypto.timingSafeEqual(a, b);
-}
-
-function requestPrincipal() {
-  if (authRequired()) return principal(process.env.APP_STUDIO_USER, ['platform-admin'], 'basic');
-  return principal('local-development', ['platform-admin'], 'none');
-}
-
-function demandAuth(res) {
-  res.statusCode = 401;
-  res.setHeader('WWW-Authenticate', 'Basic realm="Invarture App Studio", charset="UTF-8"');
-  res.setHeader('Cache-Control', 'no-store');
-  res.end('Authentication required');
-}
-
 function health(res) {
   res.statusCode = 200;
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   res.setHeader('Cache-Control', 'no-store');
-  res.end(JSON.stringify({ ok: true, version: BUILD_INFO.version, commit: BUILD_INFO.shortCommit || null }));
+  res.end(JSON.stringify({ ok: true, version: BUILD_INFO.version, commit: BUILD_INFO.shortCommit || null, authMode: auth.mode() }));
 }
 
 function serveStatic(req, res) {
@@ -97,24 +73,40 @@ function serveStatic(req, res) {
 
 const server = http.createServer(async (req, res) => {
   applySecurityHeaders(res);
-  if (req.url === '/healthz' || req.url.startsWith('/healthz?')) return health(res);
-  if (!authorized(req)) return demandAuth(res);
-  req.principal = requestPrincipal();
-  if (req.url.startsWith('/api/version')) return versionApi(req, res);
-  if (req.url.startsWith('/api/platform')) return platformApi(req, res);
-  if (req.url.startsWith('/api/security')) return securityApi(req, res);
-  if (req.url.startsWith('/api/audit')) return auditApi(req, res);
-  if (req.url.startsWith('/api/deployments')) return deploymentsApi(req, res);
-  if (req.url.startsWith('/api/sap')) return sapApi(req, res);
-  if (req.url.startsWith('/api/workspace')) return workspaceApi(req, res);
-  return serveStatic(req, res);
+  try {
+    if (req.url === '/healthz' || req.url.startsWith('/healthz?')) return health(res);
+    if (req.url.startsWith('/auth/')) return authApi(req, res);
+
+    req.principal = await auth.resolvePrincipal(req);
+    if (!req.principal) return auth.unauthorized(req, res);
+
+    if (req.url.startsWith('/api/version')) return versionApi(req, res);
+    if (req.url.startsWith('/api/platform')) return platformApi(req, res);
+    if (req.url.startsWith('/api/security')) return securityApi(req, res);
+    if (req.url.startsWith('/api/audit')) return auditApi(req, res);
+    if (req.url.startsWith('/api/deployments')) return deploymentsApi(req, res);
+    if (req.url.startsWith('/api/sap')) return sapApi(req, res);
+    if (req.url.startsWith('/api/workspace')) return workspaceApi(req, res);
+    return serveStatic(req, res);
+  } catch (error) {
+    console.error('Request handling error:', error.message);
+    if (res.headersSent) return res.end();
+    res.statusCode = Number(error.statusCode) || 500;
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-store');
+    return res.end(JSON.stringify({ error: error.message || 'Request failed.' }));
+  }
 });
 
 async function start() {
   try {
     if (database.enabled()) await database.ensureDatabase();
+    if (oidc.enabled()) {
+      oidc.validateConfig();
+      if (!database.enabled()) throw new Error('PostgreSQL/DATABASE_URL is required when OIDC authentication is enabled.');
+    }
   } catch (error) {
-    console.error('Database initialization failed:', error.message);
+    console.error('Platform initialization failed:', error.message);
     process.exitCode = 1;
     return;
   }
@@ -124,7 +116,8 @@ async function start() {
     if (BUILD_INFO.commit) console.log(`Running Git commit: ${BUILD_INFO.commit}`);
     else console.log('Git commit metadata is unavailable for this runtime.');
     console.log(`Workspace storage: ${workspaceStore.storageMode()}`);
-    console.log(authRequired() ? 'HTTP Basic protection is enabled.' : 'HTTP Basic protection is disabled. Local development receives the transitional platform-admin role.');
+    console.log(`Authentication mode: ${auth.mode()}`);
+    if (auth.mode() === 'local') console.log('Local development receives the transitional platform-admin role.');
     if (!process.env.SAP_CONNECTIONS_JSON) console.log('SAP_CONNECTIONS_JSON is not set: Connection Center will show no server-side SAP connections.');
   });
 }
