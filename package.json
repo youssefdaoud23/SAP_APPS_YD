@@ -6,11 +6,15 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
-    "test": "node tests/platform-model.test.js && node tests/security-model.test.js && node tests/function-engine.test.js",
+    "test": "node tests/platform-model.test.js && node tests/security-model.test.js && node tests/function-engine.test.js && node tests/v09-platform.test.js",
+    "test:e2e": "playwright test",
     "build:info": "node scripts/generate-build-info.js"
   },
   "dependencies": {
     "pg": "^8.13.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0"
   },
   "engines": {
     "node": ">=18"
