@@ -1,0 +1,147 @@
+name: V0.9 Release Governance
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  release-governance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Validate governance modules and backup scripts
+        run: |
+          node --check lib/releaseGovernance.js
+          node --check api/releaseApprovals.js
+          node --check api/deploymentGateway.js
+          node --check lib/releaseDiff.js
+          node --check api/releases.js
+          node --check release-center-v09.js
+          sh -n scripts/backup.sh
+          sh -n scripts/restore.sh
+
+      - name: Build image
+        run: docker build -t invarture-app-studio:release-ci .
+
+      - name: Start governed test stack
+        run: |
+          docker network create invarture-release-ci
+          docker run -d --name invarture-release-db --network invarture-release-ci \
+            -e POSTGRES_DB=invarture -e POSTGRES_USER=invarture -e POSTGRES_PASSWORD=release_test_password \
+            postgres:17-alpine
+          READY=0
+          for i in {1..60}; do
+            if docker exec invarture-release-db psql -U invarture -d invarture -tAc 'SELECT 1' 2>/dev/null | grep -qx '1'; then
+              sleep 1
+              if docker exec invarture-release-db psql -U invarture -d invarture -tAc 'SELECT 1' 2>/dev/null | grep -qx '1'; then READY=1; break; fi
+            fi
+            sleep .5
+          done
+          test "$READY" = "1"
+          docker run -d --name invarture-release-app --network invarture-release-ci -p 18091:8081 \
+            -e PORT=8081 \
+            -e DATABASE_URL=postgresql://invarture:release_test_password@invarture-release-db:5432/invarture \
+            -e WORKSPACE_STORAGE=postgres \
+            -e AUTH_MODE=local \
+            -e RELEASE_APPROVALS_ENABLED=true \
+            -e RELEASE_SELF_APPROVAL=true \
+            invarture-app-studio:release-ci
+          APP_READY=0
+          for i in {1..60}; do
+            if curl -fsS http://127.0.0.1:18091/healthz >/tmp/release-health.json; then APP_READY=1; break; fi
+            sleep .5
+          done
+          test "$APP_READY" = "1"
+
+      - name: Create two DEV snapshots and compare them
+        run: |
+          cat >/tmp/release-a.json <<'JSON'
+          {"environmentKey":"DEV","versionLabel":"1.0.0","application":{"id":"release-app","name":"Release App","status":"published","pages":[{"id":"main","name":"Main","components":[{"id":"title","type":"heading","text":"Version A"}]}]}}
+          JSON
+          cat >/tmp/release-b.json <<'JSON'
+          {"environmentKey":"DEV","versionLabel":"1.1.0","application":{"id":"release-app","name":"Release App","status":"published","pages":[{"id":"main","name":"Main","components":[{"id":"title","type":"heading","text":"Version B"},{"id":"status","type":"objectStatus","text":"Ready","state":"success"}]}]}}
+          JSON
+          curl -fsS -X POST 'http://127.0.0.1:18091/api/deployments?action=deploy' -H 'Content-Type: application/json' --data-binary @/tmp/release-a.json >/tmp/release-a-out.json
+          curl -fsS -X POST 'http://127.0.0.1:18091/api/deployments?action=deploy' -H 'Content-Type: application/json' --data-binary @/tmp/release-b.json >/tmp/release-b-out.json
+          A_ID="$(node -p "require('/tmp/release-a-out.json').deployment.id")"
+          B_ID="$(node -p "require('/tmp/release-b-out.json').deployment.id")"
+          curl -fsS "http://127.0.0.1:18091/api/releases?action=compare&from=$A_ID&to=$B_ID" >/tmp/release-diff.json
+          test "$(node -p "require('/tmp/release-diff.json').diff.totalChanges")" -ge 2
+          grep 'Version A' /tmp/release-diff.json
+          grep 'Version B' /tmp/release-diff.json
+          grep 'components' /tmp/release-diff.json
+
+      - name: Reject protected PRD deployment without approval
+        run: |
+          node -e "const fs=require('fs');const x=require('/tmp/release-b.json');x.environmentKey='PRD';x.versionLabel='1.1.0-prd';fs.writeFileSync('/tmp/release-prd.json',JSON.stringify(x))"
+          CODE="$(curl -s -o /tmp/release-no-approval.json -w '%{http_code}' -X POST 'http://127.0.0.1:18091/api/deployments?action=deploy' -H 'Content-Type: application/json' --data-binary @/tmp/release-prd.json)"
+          test "$CODE" = "428"
+          grep 'requires an approved release request' /tmp/release-no-approval.json
+
+      - name: Request approve and consume exact release approval
+        run: |
+          node - <<'NODE'
+          const fs=require('fs');
+          const deploy=JSON.parse(fs.readFileSync('/tmp/release-prd.json','utf8'));
+          fs.writeFileSync('/tmp/approval-request.json',JSON.stringify({action:'deploy',reason:'CI four-eyes release',application:deploy.application,environmentKey:'PRD'}));
+          NODE
+          curl -fsS -X POST 'http://127.0.0.1:18091/api/release-approvals?action=request' -H 'Content-Type: application/json' --data-binary @/tmp/approval-request.json >/tmp/approval-requested.json
+          APPROVAL_ID="$(node -p "require('/tmp/approval-requested.json').approval.id")"
+          test -n "$APPROVAL_ID"
+          curl -fsS -X POST 'http://127.0.0.1:18091/api/release-approvals?action=approve' -H 'Content-Type: application/json' --data "{\"id\":\"$APPROVAL_ID\",\"note\":\"CI approved\"}" >/tmp/approval-approved.json
+          grep '"status":"approved"' /tmp/approval-approved.json
+          node - <<NODE
+          const fs=require('fs');const body=JSON.parse(fs.readFileSync('/tmp/release-prd.json','utf8'));body.approvalId='$APPROVAL_ID';fs.writeFileSync('/tmp/release-prd-approved.json',JSON.stringify(body));
+          NODE
+          curl -fsS -X POST 'http://127.0.0.1:18091/api/deployments?action=deploy' -H 'Content-Type: application/json' --data-binary @/tmp/release-prd-approved.json >/tmp/release-prd-out.json
+          grep '"environmentKey":"PRD"' /tmp/release-prd-out.json
+          curl -fsS "http://127.0.0.1:18091/api/release-approvals?action=get&id=$APPROVAL_ID" >/tmp/approval-consumed.json
+          grep '"status":"consumed"' /tmp/approval-consumed.json
+          CODE="$(curl -s -o /tmp/approval-reuse.json -w '%{http_code}' -X POST 'http://127.0.0.1:18091/api/deployments?action=deploy' -H 'Content-Type: application/json' --data-binary @/tmp/release-prd-approved.json)"
+          test "$CODE" = "409"
+          grep 'not approved' /tmp/approval-reuse.json
+
+      - name: Refuse approval bound to a different snapshot
+        run: |
+          curl -fsS -X POST 'http://127.0.0.1:18091/api/release-approvals?action=request' -H 'Content-Type: application/json' --data-binary @/tmp/approval-request.json >/tmp/approval-mismatch-requested.json
+          APPROVAL_ID="$(node -p "require('/tmp/approval-mismatch-requested.json').approval.id")"
+          curl -fsS -X POST 'http://127.0.0.1:18091/api/release-approvals?action=approve' -H 'Content-Type: application/json' --data "{\"id\":\"$APPROVAL_ID\"}" >/dev/null
+          node - <<NODE
+          const fs=require('fs');const body=JSON.parse(fs.readFileSync('/tmp/release-prd.json','utf8'));body.application.pages[0].components[0].text='Tampered after approval';body.approvalId='$APPROVAL_ID';fs.writeFileSync('/tmp/release-tampered.json',JSON.stringify(body));
+          NODE
+          CODE="$(curl -s -o /tmp/release-mismatch.json -w '%{http_code}' -X POST 'http://127.0.0.1:18091/api/deployments?action=deploy' -H 'Content-Type: application/json' --data-binary @/tmp/release-tampered.json)"
+          test "$CODE" = "409"
+          grep 'snapshotChecksum' /tmp/release-mismatch.json
+
+      - name: Verify governance audit records
+        run: |
+          curl -fsS 'http://127.0.0.1:18091/api/audit?limit=200' >/tmp/release-audit.json
+          grep 'release.approval.requested' /tmp/release-audit.json
+          grep 'release.approval.approved' /tmp/release-audit.json
+          grep 'release.approval.consumed' /tmp/release-audit.json
+          test "$(docker exec invarture-release-db psql -U invarture -d invarture -tAc "SELECT COUNT(*) FROM platform_release_approvals WHERE status='consumed'")" -eq 1
+
+      - name: Diagnostics on failure
+        if: failure()
+        run: |
+          docker logs invarture-release-app || true
+          cat /tmp/release-no-approval.json || true
+          cat /tmp/approval-requested.json || true
+          cat /tmp/approval-approved.json || true
+          cat /tmp/release-prd-out.json || true
+          cat /tmp/approval-reuse.json || true
+          cat /tmp/release-mismatch.json || true
+          cat /tmp/release-diff.json || true
+
+      - name: Cleanup
+        if: always()
+        run: |
+          docker rm -f invarture-release-app invarture-release-db 2>/dev/null || true
+          docker network rm invarture-release-ci 2>/dev/null || true
