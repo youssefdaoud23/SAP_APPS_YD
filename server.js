@@ -13,7 +13,8 @@ const versionApi = require('./api/version');
 const platformApi = require('./api/platform');
 const securityApi = require('./api/security');
 const auditApi = require('./api/audit');
-const deploymentsApi = require('./api/deployments');
+const deploymentGateway = require('./api/deploymentGateway');
+const releaseApprovalsApi = require('./api/releaseApprovals');
 const apisApi = require('./api/apis');
 const openApi = require('./api/openapi');
 const apiRuntime = require('./api/apiRuntime');
@@ -26,6 +27,7 @@ const auth = require('./lib/auth');
 const oidc = require('./lib/oidc');
 const database = require('./lib/database');
 const workspaceStore = require('./lib/workspaceStore');
+const releaseGovernance = require('./lib/releaseGovernance');
 const { getBuildInfo } = require('./lib/buildInfo');
 
 const PORT = Number(process.env.PORT || 8081);
@@ -46,6 +48,8 @@ function applySecurityHeaders(res) {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
   res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('X-Permitted-Cross-Domain-Policies', 'none');
+  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
   res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
   res.setHeader('X-Invarture-Version', BUILD_INFO.version);
   res.setHeader('X-Invarture-Commit', BUILD_INFO.shortCommit || 'unavailable');
@@ -96,7 +100,8 @@ const server = http.createServer(async (req, res) => {
     if (req.url.startsWith('/api/platform')) return platformApi(req, res);
     if (req.url.startsWith('/api/security')) return securityApi(req, res);
     if (req.url.startsWith('/api/audit')) return auditApi(req, res);
-    if (req.url.startsWith('/api/deployments')) return deploymentsApi(req, res);
+    if (req.url.startsWith('/api/release-approvals')) return releaseApprovalsApi(req, res);
+    if (req.url.startsWith('/api/deployments')) return deploymentGateway(req, res);
     if (req.url.startsWith('/api/openapi')) return openApi(req, res);
     if (req.url.startsWith('/api/apis')) return apisApi(req, res);
     if (req.url.startsWith('/api/functions')) return functionsApi(req, res);
@@ -122,6 +127,7 @@ async function start() {
       oidc.validateConfig();
       if (!database.enabled()) throw new Error('PostgreSQL/DATABASE_URL is required when OIDC authentication is enabled.');
     }
+    if (database.enabled() && releaseGovernance.enabled()) await releaseGovernance.ensureSchema();
   } catch (error) {
     console.error('Platform initialization failed:', error.message);
     process.exitCode = 1;
@@ -134,6 +140,7 @@ async function start() {
     else console.log('Git commit metadata is unavailable for this runtime.');
     console.log(`Workspace storage: ${workspaceStore.storageMode()}`);
     console.log(`Authentication mode: ${auth.mode()}`);
+    console.log(`Protected release approvals: ${releaseGovernance.enabled() ? 'enabled' : 'disabled'}`);
     if (auth.mode() === 'local') console.log('Local development receives the transitional platform-admin role.');
     if (!process.env.SAP_CONNECTIONS_JSON) console.log('SAP_CONNECTIONS_JSON is not set: Connection Center will show no server-side SAP connections.');
     if (!process.env.SAP_RFC_CONNECTIONS_JSON) console.log('SAP_RFC_CONNECTIONS_JSON is not set: RFC/BAPI Center will show no bridge connections.');
