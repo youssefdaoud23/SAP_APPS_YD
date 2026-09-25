@@ -38,11 +38,19 @@ jobs:
             -e POSTGRES_USER=invarture \
             -e POSTGRES_PASSWORD=auth_test_password \
             postgres:17-alpine
-          for i in {1..40}; do
-            if docker exec invarture-auth-db pg_isready -U invarture -d invarture >/dev/null 2>&1; then break; fi
+
+          READY=0
+          for i in {1..60}; do
+            if docker exec invarture-auth-db psql -U invarture -d invarture -tAc 'SELECT 1' 2>/dev/null | grep -qx '1'; then
+              sleep 1
+              if docker exec invarture-auth-db psql -U invarture -d invarture -tAc 'SELECT 1' 2>/dev/null | grep -qx '1'; then
+                READY=1
+                break
+              fi
+            fi
             sleep 0.5
           done
-          docker exec invarture-auth-db pg_isready -U invarture -d invarture
+          test "$READY" = "1"
 
           docker run -d --name invarture-auth-oidc --network invarture-auth-net --network-alias oidc.local \
             -p 18084:18084 \
@@ -66,10 +74,15 @@ jobs:
             -e OIDC_DEFAULT_ROLE=viewer \
             invarture-app-studio:auth-ci
 
-          for i in {1..40}; do
-            if curl --noproxy '*' -fsS http://app.local:18085/healthz >/tmp/auth-health.json; then break; fi
+          APP_READY=0
+          for i in {1..60}; do
+            if curl --noproxy '*' -fsS http://app.local:18085/healthz >/tmp/auth-health.json; then
+              APP_READY=1
+              break
+            fi
             sleep 0.5
           done
+          test "$APP_READY" = "1"
           grep '"ok":true' /tmp/auth-health.json
           grep '"authMode":"oidc"' /tmp/auth-health.json
 
