@@ -52,8 +52,17 @@ module.exports = async function platformHandler(req, res) {
         oidc: oidc.enabled(),
         apiDesigner: db.connected === true,
         reusableApiRuntime: db.connected === true,
+        openApi31: db.connected === true,
+        declarativeApiMappings: db.connected === true,
         serverFunctions: db.connected === true,
-        serverFunctionMode: 'declarative-pipeline'
+        serverFunctionMode: 'declarative-pipeline',
+        workflows: db.connected === true,
+        workflowTasks: db.connected === true,
+        workflowMode: 'durable-declarative',
+        roleAwareLaunchpad: true,
+        enterpriseComponentCatalog: true,
+        rfcBapiBridge: Boolean(String(process.env.SAP_RFC_CONNECTIONS_JSON || '').trim() && String(process.env.SAP_RFC_CONNECTIONS_JSON || '').trim() !== '[]'),
+        rfcAdapter: 'optional-http-json-bridge'
       }
     });
   } catch (error) {
