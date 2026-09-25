@@ -17,6 +17,8 @@ const apisApi = require('./api/apis');
 const apiRuntime = require('./api/apiRuntime');
 const functionsApi = require('./api/functions');
 const functionRuntime = require('./api/functionRuntime');
+const workflowsApi = require('./api/workflows');
+const workflowRuntime = require('./api/workflowRuntime');
 const authApi = require('./api/auth');
 const auth = require('./lib/auth');
 const oidc = require('./lib/oidc');
@@ -86,6 +88,7 @@ const server = http.createServer(async (req, res) => {
 
     if (req.url.startsWith('/runtime/api/')) return apiRuntime(req, res);
     if (req.url.startsWith('/runtime/functions/')) return functionRuntime(req, res);
+    if (req.url.startsWith('/runtime/workflows/') || req.url.startsWith('/runtime/tasks') || req.url.startsWith('/runtime/workflow-instances/')) return workflowRuntime(req, res);
     if (req.url.startsWith('/api/version')) return versionApi(req, res);
     if (req.url.startsWith('/api/platform')) return platformApi(req, res);
     if (req.url.startsWith('/api/security')) return securityApi(req, res);
@@ -93,6 +96,7 @@ const server = http.createServer(async (req, res) => {
     if (req.url.startsWith('/api/deployments')) return deploymentsApi(req, res);
     if (req.url.startsWith('/api/apis')) return apisApi(req, res);
     if (req.url.startsWith('/api/functions')) return functionsApi(req, res);
+    if (req.url.startsWith('/api/workflows')) return workflowsApi(req, res);
     if (req.url.startsWith('/api/sap')) return sapApi(req, res);
     if (req.url.startsWith('/api/workspace')) return workspaceApi(req, res);
     return serveStatic(req, res);
