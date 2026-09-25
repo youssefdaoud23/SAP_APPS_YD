@@ -49,7 +49,11 @@ module.exports = async function platformHandler(req, res) {
         persistentIdentityMappings: db.connected === true,
         persistentSessions: db.connected === true,
         groupsAndRolesSchema: db.connected === true,
-        oidc: oidc.enabled()
+        oidc: oidc.enabled(),
+        apiDesigner: db.connected === true,
+        reusableApiRuntime: db.connected === true,
+        serverFunctions: db.connected === true,
+        serverFunctionMode: 'declarative-pipeline'
       }
     });
   } catch (error) {
